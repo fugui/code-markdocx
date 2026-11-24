@@ -32,7 +32,7 @@ func SplitByH2(markdown string, baseName string, maxBytes int64) []SplitChunk {
 	var sections []section
 	var curTitle string
 	var buf []string
-	inFence := false
+	var activeFence fenceMarker
 
 	flush := func() {
 		body := strings.TrimSpace(strings.Join(buf, "\n"))
@@ -47,10 +47,14 @@ func SplitByH2(markdown string, baseName string, maxBytes int64) []SplitChunk {
 
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~") {
-			inFence = !inFence
+		if !activeFence.active {
+			if fm, _, ok := parseFenceOpen(trimmed); ok {
+				activeFence = fm
+			}
+		} else if isFenceClose(trimmed, activeFence) {
+			activeFence = fenceMarker{}
 		}
-		if !inFence && strings.HasPrefix(line, "## ") {
+		if !activeFence.active && strings.HasPrefix(line, "## ") {
 			flush()
 			curTitle = strings.TrimSpace(strings.TrimPrefix(line, "## "))
 		}
@@ -119,4 +123,48 @@ func sanitizeFilenamePart(s string) string {
 		count++
 	}
 	return strings.Trim(b.String(), "-.")
+}
+
+type fenceMarker struct {
+	active bool
+	char   byte
+	length int
+}
+
+func parseFenceOpen(trimmed string) (fenceMarker, string, bool) {
+	if len(trimmed) < 3 {
+		return fenceMarker{}, "", false
+	}
+	ch := trimmed[0]
+	if ch != '`' && ch != '~' {
+		return fenceMarker{}, "", false
+	}
+	n := 0
+	for n < len(trimmed) && trimmed[n] == ch {
+		n++
+	}
+	if n < 3 {
+		return fenceMarker{}, "", false
+	}
+	info := strings.TrimSpace(trimmed[n:])
+	if ch == '`' && strings.Contains(info, "`") {
+		return fenceMarker{}, "", false
+	}
+	firstWord := info
+	if sp := strings.IndexAny(info, " \t"); sp >= 0 {
+		firstWord = info[:sp]
+	}
+	return fenceMarker{active: true, char: ch, length: n}, firstWord, true
+}
+
+func isFenceClose(trimmed string, fm fenceMarker) bool {
+	if !fm.active || len(trimmed) < fm.length {
+		return false
+	}
+	for i := 0; i < len(trimmed); i++ {
+		if trimmed[i] != fm.char {
+			return false
+		}
+	}
+	return true
 }

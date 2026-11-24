@@ -461,3 +461,148 @@ func TestCreateJobLogsOperatorFileImagesAndLoad(t *testing.T) {
 		}
 	}
 }
+
+func TestCodePolishNoImageDocxAndCodeScreenshotPatch(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	vlmSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Messages []struct {
+				Role    string          `json:"role"`
+				Content json.RawMessage `json:"content"`
+			} `json:"messages"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		userMsg := ""
+		if len(req.Messages) > 1 {
+			userMsg = string(req.Messages[1].Content)
+		}
+		if strings.Contains(userMsg, "format_code") || strings.Contains(userMsg, "detect_code") {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"choices": []map[string]any{
+					{"message": map[string]string{
+						"content": `{"is_code":true,"language":"go","start_line":1,"end_line":3,"formatted_code":"func GenerateToken() {\n\tsecret := getJWTSecret()\n}"}`,
+					}},
+				},
+			})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{"message": map[string]string{
+					"content": `{"category":"code_screenshot","code_language":"sql","code_content":"SELECT id FROM users;","summary":"查询用户表","confidence":"high"}`,
+				}},
+			},
+		})
+	}))
+	defer vlmSrv.Close()
+
+	cfg := config.DefaultConfig()
+	cfg.Storage.TempDir = t.TempDir()
+	cfg.VLM.BaseURL = vlmSrv.URL
+	cfg.VLM.APIKey = "sk-mock"
+	cfg.VLM.Model = "mock-vl"
+
+	store, err := server.NewJobStore(cfg.Storage.TempDir, 60, 10, 524288)
+	if err != nil {
+		t.Fatalf("NewJobStore: %v", err)
+	}
+	defer store.Close()
+
+	vlmClient := vlm.NewClient(vlm.ClientConfig{
+		BaseURL: cfg.VLM.BaseURL,
+		APIKey:  cfg.VLM.APIKey,
+		Model:   cfg.VLM.Model,
+		Timeout: 5 * time.Second,
+	})
+
+	r := gin.New()
+	server.RegisterRoutes(r, server.NewHandlers(cfg, store, vlmClient))
+
+	// Build a docx with zero-indent monospace Go code and NO images
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	wDoc, _ := zw.Create("word/document.xml")
+	_, _ = wDoc.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p><w:r><w:t>代码如下：</w:t></w:r></w:p>
+    <w:p><w:r><w:rPr><w:rFonts w:ascii="Consolas"/></w:rPr><w:t>func GenerateToken() {</w:t></w:r></w:p>
+    <w:p><w:r><w:rPr><w:rFonts w:ascii="Consolas"/></w:rPr><w:t>secret := getJWTSecret()</w:t></w:r></w:p>
+    <w:p><w:r><w:rPr><w:rFonts w:ascii="Consolas"/></w:rPr><w:t>}</w:t></w:r></w:p>
+  </w:body>
+</w:document>`))
+	_ = zw.Close()
+
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	fw, _ := mw.CreateFormFile("file", "code-only.docx")
+	_, _ = fw.Write(buf.Bytes())
+	_ = mw.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/jobs", &body)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var created server.JobDetail
+	_ = json.Unmarshal(rec.Body.Bytes(), &created)
+
+	var detail server.JobDetail
+	for i := 0; i < 40; i++ {
+		getReq := httptest.NewRequest(http.MethodGet, "/api/jobs/"+created.ID, nil)
+		getRec := httptest.NewRecorder()
+		r.ServeHTTP(getRec, getReq)
+		_ = json.Unmarshal(getRec.Body.Bytes(), &detail)
+		if detail.Status == server.JobDone {
+			break
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	if detail.Status != server.JobDone {
+		t.Fatalf("expected code-only job done, got %s", detail.Status)
+	}
+	if !strings.Contains(detail.Markdown, "```go\nfunc GenerateToken() {\n\tsecret := getJWTSecret()\n}\n```") {
+		t.Fatalf("expected LLM-indented go fenced block in markdown:\n%s", detail.Markdown)
+	}
+
+	// Also verify code_screenshot image conversion + PATCH
+	var body2 bytes.Buffer
+	mw2 := multipart.NewWriter(&body2)
+	fw2, _ := mw2.CreateFormFile("file", "img-code.docx")
+	_, _ = fw2.Write(buildIntegrationDocx(t))
+	_ = mw2.Close()
+
+	req2 := httptest.NewRequest(http.MethodPost, "/api/jobs", &body2)
+	req2.Header.Set("Content-Type", mw2.FormDataContentType())
+	rec2 := httptest.NewRecorder()
+	r.ServeHTTP(rec2, req2)
+	var created2 server.JobDetail
+	_ = json.Unmarshal(rec2.Body.Bytes(), &created2)
+
+	var detail2 server.JobDetail
+	for i := 0; i < 40; i++ {
+		getReq := httptest.NewRequest(http.MethodGet, "/api/jobs/"+created2.ID, nil)
+		getRec := httptest.NewRecorder()
+		r.ServeHTTP(getRec, getReq)
+		_ = json.Unmarshal(getRec.Body.Bytes(), &detail2)
+		if detail2.Status == server.JobDone {
+			break
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	if !strings.Contains(detail2.Markdown, "```sql\nSELECT id FROM users;\n```") {
+		t.Fatalf("expected code_screenshot sql block in markdown:\n%s", detail2.Markdown)
+	}
+
+	patchReq := httptest.NewRequest(http.MethodPatch, "/api/jobs/"+created2.ID+"/images/img-001", strings.NewReader(`{"category":"code_screenshot","code_language":"go","code_content":"package main"}`))
+	patchReq.Header.Set("Content-Type", "application/json")
+	patchRec := httptest.NewRecorder()
+	r.ServeHTTP(patchRec, patchReq)
+	if patchRec.Code != http.StatusOK || !strings.Contains(patchRec.Body.String(), "package main") {
+		t.Fatalf("patch code_screenshot failed: %d %s", patchRec.Code, patchRec.Body.String())
+	}
+}

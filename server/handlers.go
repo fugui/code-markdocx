@@ -155,6 +155,7 @@ func (h *Handlers) CreateJob(c *gin.Context) {
 	imageOrder := make([]string, 0, len(prepped))
 	imageFiles := make(map[string]ImageFileMeta, len(prepped))
 	var vlmInputs []vlm.ConvertImageInput
+	var codeTasks []mdpolish.CodePolishTask
 
 	vlmConfigured := h.cfg.VLM.IsConfigured() && h.vlmClient != nil
 
@@ -227,6 +228,11 @@ func (h *Handlers) CreateJob(c *gin.Context) {
 		states[a.ID] = st
 	}
 
+	if !opts.SkipVLM && vlmConfigured {
+		codeTasks = mdpolish.ExtractCodePolishTasks(doc, glossary, 12)
+	}
+	totalProgress := len(vlmInputs) + len(codeTasks)
+
 	operator := extractRequestOperator(c)
 	clientIP := c.ClientIP()
 
@@ -243,10 +249,10 @@ func (h *Handlers) CreateJob(c *gin.Context) {
 		ImageOrder:    imageOrder,
 		Images:        states,
 		ImageFiles:    imageFiles,
-		ProgressTotal: len(vlmInputs),
+		ProgressTotal: totalProgress,
 		Cancel:        cancel,
 	}
-	if len(vlmInputs) > 0 {
+	if totalProgress > 0 {
 		job.Status = JobRunning
 	}
 
@@ -276,14 +282,14 @@ func (h *Handlers) CreateJob(c *gin.Context) {
 	}
 	runningJobs, totalJobs, pendingVLM := h.store.LoadStats()
 	log.Printf(
-		"[code-markdocx] 开始转换: job=%s user=%s ip=%s file=%q size=%s images=%d(待VLM:%d, 跳过:%d, 矢量降级:%d, 原图:%d, 失败:%d) | 服务器负载: running_jobs=%d/%d, pending_vlm_images=%d",
+		"[code-markdocx] 开始转换: job=%s user=%s ip=%s file=%q size=%s images=%d(待VLM:%d, 跳过:%d, 矢量降级:%d, 原图:%d, 失败:%d) code_polish=%d | 服务器负载: running_jobs=%d/%d, pending_vlm_images=%d",
 		jobID, operator, clientIP, filename, formatLogSize(int64(len(docxBytes))),
 		len(states), len(vlmInputs), skippedCount, vectorCount, keptOrigCount, failedCount,
-		runningJobs, totalJobs, pendingVLM,
+		len(codeTasks), runningJobs, totalJobs, pendingVLM,
 	)
 
-	if len(vlmInputs) > 0 {
-		go h.runBatchVLM(ctx, jobID, vlmInputs)
+	if totalProgress > 0 {
+		go h.runBatchVLM(ctx, jobID, vlmInputs, codeTasks)
 	}
 
 	detail, err := h.store.GetDetail(jobID)
@@ -294,30 +300,50 @@ func (h *Handlers) CreateJob(c *gin.Context) {
 	c.JSON(http.StatusCreated, detail)
 }
 
-func (h *Handlers) runBatchVLM(ctx context.Context, jobID string, inputs []vlm.ConvertImageInput) {
+func (h *Handlers) runBatchVLM(ctx context.Context, jobID string, inputs []vlm.ConvertImageInput, codeTasks []mdpolish.CodePolishTask) {
 	start := time.Now()
-	vlm.ProcessBatch(ctx, h.vlmClient, inputs, h.cfg.VLM.MaxConcurrency, func(prog vlm.BatchProgress) {
-		_ = h.store.MutateJob(jobID, func(job *Job) {
-			job.ProgressDone = prog.Done
-			st := job.Images[prog.ImageID]
-			if st == nil {
-				return
-			}
-			if prog.Err != nil {
-				st.Status = mdpolish.StatusFailed
-				st.Error = prog.Err.Error()
-			} else {
-				applyVLMResult(st, prog.Result)
-			}
-			if job.Options.KeepUnconvertedOriginals && mdpolish.IsUnconvertedToStructured(st) {
-				st.KeepOriginal = true
-				st.Skipped = false
-				st.SkipReason = ""
-				st.Error = ""
-				st.Status = mdpolish.StatusDone
-			}
+	if len(inputs) > 0 {
+		vlm.ProcessBatch(ctx, h.vlmClient, inputs, h.cfg.VLM.MaxConcurrency, func(prog vlm.BatchProgress) {
+			_ = h.store.MutateJob(jobID, func(job *Job) {
+				job.ProgressDone = prog.Done
+				st := job.Images[prog.ImageID]
+				if st == nil {
+					return
+				}
+				if prog.Err != nil {
+					st.Status = mdpolish.StatusFailed
+					st.Error = prog.Err.Error()
+				} else {
+					applyVLMResult(st, prog.Result)
+				}
+				if job.Options.KeepUnconvertedOriginals && mdpolish.IsUnconvertedToStructured(st) {
+					st.KeepOriginal = true
+					st.Skipped = false
+					st.SkipReason = ""
+					st.Error = ""
+					st.Status = mdpolish.StatusDone
+				}
+			})
 		})
-	})
+	}
+
+	if len(codeTasks) > 0 && ctx.Err() == nil {
+		baseDone := len(inputs)
+		codeInputs := make([]vlm.CodePolishInput, 0, len(codeTasks))
+		for _, t := range codeTasks {
+			codeInputs = append(codeInputs, t.Input)
+		}
+		codeResults := vlm.ProcessCodePolishBatch(ctx, h.vlmClient, codeInputs, h.cfg.VLM.MaxConcurrency, func(prog vlm.CodePolishProgress) {
+			_ = h.store.MutateJob(jobID, func(job *Job) {
+				job.ProgressDone = baseDone + prog.Done
+			})
+		})
+		if len(codeResults) > 0 {
+			_ = h.store.MutateJob(jobID, func(job *Job) {
+				mdpolish.ApplyCodePolishResults(job.Doc, codeTasks, codeResults)
+			})
+		}
+	}
 
 	var (
 		filename string
@@ -360,6 +386,8 @@ func applyVLMResult(st *mdpolish.ImageState, res *vlm.VLMResult) {
 	st.DiagramType = res.DiagramType
 	st.MermaidCode = res.MermaidCode
 	st.MarkdownTable = res.MarkdownTable
+	st.CodeLanguage = res.CodeLanguage
+	st.CodeContent = res.CodeContent
 	st.Summary = res.Summary
 	st.Confidence = res.Confidence
 	st.Notes = res.Notes
@@ -408,6 +436,8 @@ type patchImageReq struct {
 	DiagramType   *vlm.DiagramType     `json:"diagram_type"`
 	MermaidCode   *string              `json:"mermaid_code"`
 	MarkdownTable *string              `json:"markdown_table"`
+	CodeLanguage  *string              `json:"code_language"`
+	CodeContent   *string              `json:"code_content"`
 	Summary       *string              `json:"summary"`
 	Skipped       *bool                `json:"skipped"`
 	KeepOriginal  *bool                `json:"keep_original"`
@@ -446,6 +476,12 @@ func (h *Handlers) PatchImage(c *gin.Context) {
 		}
 		if req.MarkdownTable != nil {
 			st.MarkdownTable = *req.MarkdownTable
+		}
+		if req.CodeLanguage != nil {
+			st.CodeLanguage = *req.CodeLanguage
+		}
+		if req.CodeContent != nil {
+			st.CodeContent = *req.CodeContent
 		}
 		if req.Summary != nil {
 			st.Summary = *req.Summary
@@ -610,7 +646,7 @@ func (h *Handlers) RetryImage(c *gin.Context) {
 	defer cancel()
 
 	var res *vlm.VLMResult
-	if strings.TrimSpace(req.MermaidError) != "" || strings.TrimSpace(req.Instruction) != "" || prevState.MermaidCode != "" {
+	if strings.TrimSpace(req.MermaidError) != "" || strings.TrimSpace(req.Instruction) != "" || prevState.MermaidCode != "" || prevState.CodeContent != "" {
 		res, err = h.vlmClient.RepairImage(ctx, vlm.RepairImageInput{
 			ConvertImageInput: convInput,
 			PreviousResult: &vlm.VLMResult{
@@ -618,6 +654,8 @@ func (h *Handlers) RetryImage(c *gin.Context) {
 				DiagramType:   prevState.DiagramType,
 				MermaidCode:   prevState.MermaidCode,
 				MarkdownTable: prevState.MarkdownTable,
+				CodeLanguage:  prevState.CodeLanguage,
+				CodeContent:   prevState.CodeContent,
 				Summary:       prevState.Summary,
 			},
 			MermaidError: req.MermaidError,

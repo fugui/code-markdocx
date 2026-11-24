@@ -219,13 +219,22 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
       const line = lines[i];
       const trimmed = line.trim();
 
-      // Fenced code blocks (``` or ~~~)
-      if (trimmed.startsWith('```') || trimmed.startsWith('~~~')) {
-        const fence = trimmed.slice(0, 3);
-        const lang = trimmed.slice(3).trim();
+      // Fenced code blocks (``` or ~~~, supporting variable-length fences)
+      const fenceMatch = trimmed.match(/^(`{3,}|~{3,})(.*)$/);
+      if (fenceMatch && !(fenceMatch[1][0] === '`' && fenceMatch[2].includes('`'))) {
+        const fenceChar = fenceMatch[1][0];
+        const fenceLen = fenceMatch[1].length;
+        const lang = fenceMatch[2].trim();
         const codeLines: string[] = [];
         i++;
-        while (i < lines.length && !lines[i].trim().startsWith(fence)) {
+        while (i < lines.length) {
+          const closeTrim = lines[i].trim();
+          if (
+            closeTrim.length >= fenceLen &&
+            [...closeTrim].every((ch) => ch === fenceChar)
+          ) {
+            break;
+          }
           codeLines.push(lines[i]);
           i++;
         }

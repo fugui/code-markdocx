@@ -184,6 +184,35 @@ test('extractHeadings ignores fenced code blocks and deduplicates IDs', () => {
   );
 });
 
+test('extractHeadings supports 4-backtick fences and code_screenshot image status', () => {
+  const md = [
+    '# 文档',
+    '````markdown',
+    '```go',
+    '# 内嵌假标题',
+    '```',
+    '````',
+    '## 真实二级标题',
+  ].join('\n');
+  const headings = extractHeadings(md);
+  assert.deepEqual(
+    headings.map((h) => h.text),
+    ['文档', '真实二级标题'],
+  );
+
+  const codeShot = makeImage({
+    category: 'code_screenshot',
+    mermaid_code: '',
+    code_language: 'go',
+    code_content: 'package main',
+  });
+  assert.equal(isUnconvertedWithImage(codeShot), false);
+  const issues = collectPreflightIssues([codeShot], makePreflight(), {
+    [codeShot.image_id]: 'should be ignored for code_screenshot',
+  });
+  assert.equal(issues.length, 0);
+});
+
 test('resolveAssetImageUrl resolves relative assets paths', () => {
   const map = {
     'assets/img-001.png': '/api/jobs/123/images/img-001',

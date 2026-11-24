@@ -51,7 +51,9 @@ export function isUnconvertedWithImage(img: ImageState): boolean {
   const hasMermaid = Boolean(img.mermaid_code && img.mermaid_code.trim());
   const hasTable =
     img.category === 'table_screenshot' && Boolean(img.markdown_table && img.markdown_table.trim());
-  return !hasMermaid && !hasTable;
+  const hasCode =
+    img.category === 'code_screenshot' && Boolean(img.code_content && img.code_content.trim());
+  return !hasMermaid && !hasTable && !hasCode;
 }
 
 export function filterImages(
@@ -145,9 +147,12 @@ export function collectPreflightIssues(
       continue;
     }
 
-    const syntaxErr = !img.keep_original && img.category !== 'table_screenshot'
-      ? syntaxErrors[img.image_id]
-      : undefined;
+    const syntaxErr =
+      !img.keep_original &&
+      img.category !== 'table_screenshot' &&
+      img.category !== 'code_screenshot'
+        ? syntaxErrors[img.image_id]
+        : undefined;
     if (syntaxErr) {
       issues.push({
         id: `syntax-${img.image_id}`,
@@ -237,19 +242,29 @@ export function extractHeadings(markdown: string): TocHeading[] {
   const headings: TocHeading[] = [];
   const seen = new Map<string, number>();
   let fenceChar: string | null = null;
+  let fenceLen = 0;
 
   for (const line of lines) {
     const trimmed = line.trim();
-    if (trimmed.startsWith('```') || trimmed.startsWith('~~~')) {
-      const marker = trimmed.slice(0, 3);
-      if (fenceChar === null) {
-        fenceChar = marker;
-      } else if (fenceChar === marker) {
-        fenceChar = null;
+    const fenceOpen = trimmed.match(/^(`{3,}|~{3,})(.*)$/);
+    if (fenceChar === null) {
+      if (fenceOpen) {
+        const marker = fenceOpen[1];
+        const info = fenceOpen[2] || '';
+        if (!(marker[0] === '`' && info.includes('`'))) {
+          fenceChar = marker[0];
+          fenceLen = marker.length;
+          continue;
+        }
       }
-      continue;
-    }
-    if (fenceChar !== null) {
+    } else {
+      if (
+        trimmed.length >= fenceLen &&
+        [...trimmed].every((ch) => ch === fenceChar)
+      ) {
+        fenceChar = null;
+        fenceLen = 0;
+      }
       continue;
     }
     const match = line.match(/^(#{1,6})\s+(.+?)\s*#*$/);

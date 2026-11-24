@@ -20,12 +20,14 @@ const (
 	BlockListItem  BlockKind = "list_item"
 	BlockTable     BlockKind = "table"
 	BlockImage     BlockKind = "image"
+	BlockCode      BlockKind = "code"
 )
 
 type Block struct {
 	Kind      BlockKind  `json:"kind"`
 	Level     int        `json:"level,omitempty"`
 	Text      string     `json:"text,omitempty"`
+	Language  string     `json:"language,omitempty"`
 	Ordered   bool       `json:"ordered,omitempty"`
 	Indent    int        `json:"indent,omitempty"`
 	TableRows [][]string `json:"table_rows,omitempty"`

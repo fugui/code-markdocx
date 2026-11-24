@@ -95,6 +95,9 @@ export const PreflightBanner: React.FC<PreflightBannerProps> = ({
               <span>预估 Token: ~{preflight.estimated_tokens}</span>
               <span>标题: {preflight.heading_count}</span>
               <span>Mermaid 图: {preflight.mermaid_block_count}</span>
+              {(preflight.code_block_count ?? 0) > 0 && (
+                <span>代码块: {preflight.code_block_count}</span>
+              )}
               {keptOriginalCount > 0 && (
                 <span className="is-info-text">
                   <ImageIcon size={13} />

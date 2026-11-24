@@ -67,28 +67,46 @@ func (c *Client) callVision(ctx context.Context, in ConvertImageInput, userPromp
 	}
 	dataURI := fmt.Sprintf("data:%s;base64,%s", ct, base64.StdEncoding.EncodeToString(in.ImageBytes))
 
-	payload := map[string]any{
-		"model":       c.cfg.Model,
-		"temperature": c.cfg.Temperature,
-		"max_tokens":  c.cfg.MaxTokens,
-		"messages": []map[string]any{
-			{
-				"role":    "system",
-				"content": BuildSystemPrompt(c.cfg.ExtraSystemPrompt),
-			},
-			{
-				"role": "user",
-				"content": []map[string]any{
-					{"type": "text", "text": userPrompt},
-					{"type": "image_url", "image_url": map[string]string{"url": dataURI}},
-				},
+	messages := []map[string]any{
+		{
+			"role":    "system",
+			"content": BuildSystemPrompt(c.cfg.ExtraSystemPrompt),
+		},
+		{
+			"role": "user",
+			"content": []map[string]any{
+				{"type": "text", "text": userPrompt},
+				{"type": "image_url", "image_url": map[string]string{"url": dataURI}},
 			},
 		},
 	}
 
+	var parsed *VLMResult
+	err := c.callChatWithRetry(ctx, messages, func(rawContent string) error {
+		res, parseErr := ParseVLMJSON(rawContent)
+		if parseErr != nil {
+			return parseErr
+		}
+		parsed = res
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return parsed, nil
+}
+
+func (c *Client) callChatWithRetry(ctx context.Context, messages []map[string]any, parseFn func(string) error) error {
+	payload := map[string]any{
+		"model":       c.cfg.Model,
+		"temperature": c.cfg.Temperature,
+		"max_tokens":  c.cfg.MaxTokens,
+		"messages":    messages,
+	}
+
 	reqBody, err := json.Marshal(payload)
 	if err != nil {
-		return nil, fmt.Errorf("marshal VLM payload: %w", err)
+		return fmt.Errorf("marshal VLM payload: %w", err)
 	}
 
 	endpoint := strings.TrimRight(strings.TrimSpace(c.cfg.BaseURL), "/") + "/chat/completions"
@@ -104,7 +122,7 @@ func (c *Client) callVision(ctx context.Context, in ConvertImageInput, userPromp
 			backoff := time.Duration(attempt*attempt) * time.Second
 			select {
 			case <-ctx.Done():
-				return nil, ctx.Err()
+				return ctx.Err()
 			case <-time.After(backoff):
 			}
 		}
@@ -118,16 +136,14 @@ func (c *Client) callVision(ctx context.Context, in ConvertImageInput, userPromp
 			continue
 		}
 
-		parsed, parseErr := ParseVLMJSON(rawContent)
-		if parseErr != nil {
+		if parseErr := parseFn(rawContent); parseErr != nil {
 			lastErr = parseErr
-			// Retry once on malformed JSON if retries remain
 			continue
 		}
-		return parsed, nil
+		return nil
 	}
 
-	return nil, lastErr
+	return lastErr
 }
 
 type chatCompletionResp struct {
@@ -215,16 +231,20 @@ func ParseVLMJSON(raw string) (*VLMResult, error) {
 
 	res.MermaidCode = stripCodeFence(res.MermaidCode)
 	res.MarkdownTable = strings.TrimSpace(res.MarkdownTable)
+	res.CodeLanguage = normalizeCodeLanguage(res.CodeLanguage)
+	res.CodeContent = stripCodeFencePreserveIndent(res.CodeContent)
 	res.Summary = strings.TrimSpace(res.Summary)
 	res.Notes = strings.TrimSpace(res.Notes)
 
 	switch res.Category {
-	case CategoryUMLDiagram, CategoryComplexArch, CategoryTableShot, CategoryUIOrDecorative:
+	case CategoryUMLDiagram, CategoryComplexArch, CategoryTableShot, CategoryCodeShot, CategoryUIOrDecorative:
 	default:
 		if res.MermaidCode != "" {
 			res.Category = CategoryUMLDiagram
 		} else if res.MarkdownTable != "" {
 			res.Category = CategoryTableShot
+		} else if res.CodeContent != "" {
+			res.Category = CategoryCodeShot
 		} else {
 			res.Category = CategoryUIOrDecorative
 		}
@@ -259,4 +279,60 @@ func stripCodeFence(code string) string {
 		return strings.TrimSpace(strings.Join(lines, "\n"))
 	}
 	return s
+}
+
+func stripCodeFencePreserveIndent(code string) string {
+	normalized := strings.ReplaceAll(code, "\r\n", "\n")
+	normalized = strings.ReplaceAll(normalized, "\r", "\n")
+	lines := strings.Split(normalized, "\n")
+	for len(lines) > 0 && strings.TrimSpace(lines[0]) == "" {
+		lines = lines[1:]
+	}
+	for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
+		lines = lines[:len(lines)-1]
+	}
+	if len(lines) >= 2 && strings.HasPrefix(strings.TrimSpace(lines[0]), "```") {
+		lines = lines[1:]
+		if len(lines) > 0 && strings.HasPrefix(strings.TrimSpace(lines[len(lines)-1]), "```") {
+			lines = lines[:len(lines)-1]
+		}
+	}
+	for len(lines) > 0 && strings.TrimSpace(lines[0]) == "" {
+		lines = lines[1:]
+	}
+	for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
+		lines = lines[:len(lines)-1]
+	}
+	return strings.Join(lines, "\n")
+}
+
+func normalizeCodeLanguage(lang string) string {
+	l := strings.ToLower(strings.TrimSpace(lang))
+	if l == "" {
+		return ""
+	}
+	var b strings.Builder
+	for _, r := range l {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '+' || r == '#' || r == '.' || r == '_' || r == '-' {
+			b.WriteRune(r)
+		}
+	}
+	clean := b.String()
+	switch clean {
+	case "golang":
+		return "go"
+	case "py":
+		return "python"
+	case "js":
+		return "javascript"
+	case "ts":
+		return "typescript"
+	case "sh", "shell", "zsh":
+		return "bash"
+	case "yml":
+		return "yaml"
+	case "text", "plaintext", "txt", "none", "unknown":
+		return ""
+	}
+	return clean
 }

@@ -135,3 +135,75 @@ func TestKeepOriginalRenderingAndHelpers(t *testing.T) {
 		t.Fatalf("kept_original image should not count as low_confidence, got %d", rep.ImageStats.LowConfidence)
 	}
 }
+
+func TestCodeBlockRenderingDynamicFenceAndCandidates(t *testing.T) {
+	doc := &docxparser.DocumentIR{
+		Blocks: []docxparser.Block{
+			{Kind: docxparser.BlockHeading, Level: 1, Text: "代码规范"},
+			{Kind: docxparser.BlockParagraph, Text: "示例："},
+			{Kind: docxparser.BlockCode, Language: "", Text: "func demo() {\nreturn\n}"},
+			{Kind: docxparser.BlockParagraph, Text: "使用反引号示例："},
+			{Kind: docxparser.BlockCode, Language: "markdown", Text: "```go\nfmt.Println(1)\n```"},
+			{Kind: docxparser.BlockParagraph, Text: "代码如下："},
+			{Kind: docxparser.BlockParagraph, Text: "a := 1"},
+			{Kind: docxparser.BlockParagraph, Text: "b := a + 2"},
+			{Kind: docxparser.BlockImage, ImageID: "img-code"},
+		},
+	}
+
+	tasks := ExtractCodePolishTasks(doc, "", 10)
+	if len(tasks) != 2 {
+		t.Fatalf("expected 2 code polish tasks (format + detect), got %d: %+v", len(tasks), tasks)
+	}
+	if tasks[0].Input.Mode != vlm.CodePolishFormat || tasks[1].Input.Mode != vlm.CodePolishDetect {
+		t.Fatalf("unexpected task modes: %+v", tasks)
+	}
+
+	results := map[string]*vlm.CodePolishResult{
+		tasks[0].Input.ID: {
+			IsCode:        true,
+			Language:      "go",
+			FormattedCode: "func demo() {\n\treturn\n}",
+		},
+		tasks[1].Input.ID: {
+			IsCode:        true,
+			Language:      "go",
+			StartLine:     1,
+			EndLine:       2,
+			FormattedCode: "a := 1\nb := a + 999", // Hallucinated modification must be blocked by guard!
+		},
+	}
+	applied := ApplyCodePolishResults(doc, tasks, results)
+	if applied != 2 {
+		t.Fatalf("expected 2 applied tasks, got %d", applied)
+	}
+	if doc.Blocks[2].Text != "func demo() {\n\treturn\n}" || doc.Blocks[2].Language != "go" {
+		t.Fatalf("expected formatted code block, got %+v", doc.Blocks[2])
+	}
+	// Block 6+7 merged to Block 6, preserving original "b := a + 2" despite hallucination in FormattedCode
+	if doc.Blocks[6].Kind != docxparser.BlockCode || !strings.Contains(doc.Blocks[6].Text, "b := a + 2") || strings.Contains(doc.Blocks[6].Text, "999") {
+		t.Fatalf("expected hallucination guard to keep original text, got %+v", doc.Blocks[6])
+	}
+
+	states := map[string]*ImageState{
+		"img-code": {
+			ImageID:      "img-code",
+			Status:       StatusDone,
+			Category:     vlm.CategoryCodeShot,
+			CodeLanguage: "python",
+			CodeContent:  "print('ok')",
+			Summary:      "Python 打印脚本",
+		},
+	}
+	md := Assemble(doc, states)
+	if !strings.Contains(md, "````markdown\n```go\nfmt.Println(1)\n```\n````") {
+		t.Fatalf("expected 4-backtick dynamic fence for nested backticks:\n%s", md)
+	}
+	if !strings.Contains(md, "```python\nprint('ok')\n```") {
+		t.Fatalf("expected code_screenshot rendered as fenced block:\n%s", md)
+	}
+	rep := Analyze(md, []*ImageState{states["img-code"]}, 524288)
+	if rep.CodeBlockCount != 4 {
+		t.Fatalf("expected 4 code blocks in preflight, got %d\n%s", rep.CodeBlockCount, md)
+	}
+}

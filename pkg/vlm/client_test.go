@@ -106,3 +106,58 @@ func TestRepairImageIncludesErrorAndInstruction(t *testing.T) {
 		t.Fatalf("expected repair user prompt payload")
 	}
 }
+
+func TestParseCodeScreenshotAndPolishCodeWithPreservationGuard(t *testing.T) {
+	rawVLM := `{
+  "category": "code_screenshot",
+  "code_language": "Golang",
+  "code_content": "` + "```go" + `\nfunc main() {\n    println(\"hi\")\n}\n` + "```" + `",
+  "summary": "打印 hi 的示例主函数。",
+  "confidence": "high",
+  "recommended_skip": false
+}`
+	res, err := ParseVLMJSON(rawVLM)
+	if err != nil {
+		t.Fatalf("ParseVLMJSON failed: %v", err)
+	}
+	if res.Category != CategoryCodeShot || res.CodeLanguage != "go" {
+		t.Fatalf("unexpected category/lang: %s/%s", res.Category, res.CodeLanguage)
+	}
+	if res.CodeContent != "func main() {\n    println(\"hi\")\n}" {
+		t.Fatalf("expected preserved indent code content, got %q", res.CodeContent)
+	}
+
+	orig := "func main() {\nx := 1\n}"
+	good := "func main() {\n\tx := 1\n}"
+	bad := "func main() {\n\ty := 1\n}"
+	if !VerifyCodePreservation(orig, good) {
+		t.Fatalf("expected whitespace-only reindent to pass preservation guard")
+	}
+	if VerifyCodePreservation(orig, bad) {
+		t.Fatalf("expected modified identifier to fail preservation guard")
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{"message": map[string]string{
+					"content": `{"is_code":true,"language":"go","start_line":1,"end_line":3,"formatted_code":"func main() {\n  x := 1\n}"}`,
+				}},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	client := NewClient(ClientConfig{BaseURL: srv.URL, Model: "gpt-4o"})
+	polished, err := client.PolishCode(context.Background(), CodePolishInput{
+		ID:    "code-001",
+		Mode:  CodePolishFormat,
+		Lines: []string{"func main() {", "x := 1", "}"},
+	})
+	if err != nil {
+		t.Fatalf("PolishCode failed: %v", err)
+	}
+	if !polished.IsCode || polished.Language != "go" || !VerifyCodePreservation(orig, polished.FormattedCode) {
+		t.Fatalf("unexpected polished result: %+v", polished)
+	}
+}

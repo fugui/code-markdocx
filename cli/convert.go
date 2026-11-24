@@ -120,8 +120,12 @@ func RunConvert(args []string) int {
 		orderedStates = append(orderedStates, st)
 	}
 
-	if len(vlmInputs) > 0 {
-		fmt.Fprintf(os.Stderr, "[3/4] 调用 VLM (%s) 并发转译 %d 张图表...\n", cfg.VLM.Model, len(vlmInputs))
+	var codeTasks []mdpolish.CodePolishTask
+	if !*noVLM && cfg.VLM.IsConfigured() {
+		codeTasks = mdpolish.ExtractCodePolishTasks(doc, *glossary, 12)
+	}
+
+	if len(vlmInputs) > 0 || len(codeTasks) > 0 {
 		client := vlm.NewClient(vlm.ClientConfig{
 			BaseURL:           cfg.VLM.BaseURL,
 			APIKey:            cfg.VLM.APIKey,
@@ -133,29 +137,44 @@ func RunConvert(args []string) int {
 			UserAgent:         cfg.VLM.EffectiveUserAgent(),
 			ExtraSystemPrompt: cfg.VLM.ExtraSystemPrompt,
 		})
-		vlm.ProcessBatch(context.Background(), client, vlmInputs, cfg.VLM.MaxConcurrency, func(prog vlm.BatchProgress) {
-			st := states[prog.ImageID]
-			if prog.Err != nil {
-				st.Status = mdpolish.StatusFailed
-				st.Error = prog.Err.Error()
-				fmt.Fprintf(os.Stderr, "  - [%d/%d] %s 失败: %v\n", prog.Done, prog.Total, prog.ImageID, prog.Err)
-				return
+		if len(vlmInputs) > 0 {
+			fmt.Fprintf(os.Stderr, "[3/4] 调用 VLM (%s) 并发转译 %d 张图表...\n", cfg.VLM.Model, len(vlmInputs))
+			vlm.ProcessBatch(context.Background(), client, vlmInputs, cfg.VLM.MaxConcurrency, func(prog vlm.BatchProgress) {
+				st := states[prog.ImageID]
+				if prog.Err != nil {
+					st.Status = mdpolish.StatusFailed
+					st.Error = prog.Err.Error()
+					fmt.Fprintf(os.Stderr, "  - [%d/%d] %s 失败: %v\n", prog.Done, prog.Total, prog.ImageID, prog.Err)
+					return
+				}
+				st.Status = mdpolish.StatusDone
+				st.Category = prog.Result.Category
+				st.DiagramType = prog.Result.DiagramType
+				st.MermaidCode = prog.Result.MermaidCode
+				st.MarkdownTable = prog.Result.MarkdownTable
+				st.CodeLanguage = prog.Result.CodeLanguage
+				st.CodeContent = prog.Result.CodeContent
+				st.Summary = prog.Result.Summary
+				st.Confidence = prog.Result.Confidence
+				st.Notes = prog.Result.Notes
+				if prog.Result.RecommendedSkip {
+					st.Skipped = true
+					st.Status = mdpolish.StatusSkipped
+					st.SkipReason = "VLM 判定为非架构装饰/界面图"
+				}
+				fmt.Fprintf(os.Stderr, "  - [%d/%d] %s 完成 (%s / %s)\n", prog.Done, prog.Total, prog.ImageID, st.Category, st.Confidence)
+			})
+		}
+		if len(codeTasks) > 0 {
+			fmt.Fprintf(os.Stderr, "[3/4] 调用 LLM (%s) 精修 %d 处代码块...\n", cfg.VLM.Model, len(codeTasks))
+			codeInputs := make([]vlm.CodePolishInput, 0, len(codeTasks))
+			for _, t := range codeTasks {
+				codeInputs = append(codeInputs, t.Input)
 			}
-			st.Status = mdpolish.StatusDone
-			st.Category = prog.Result.Category
-			st.DiagramType = prog.Result.DiagramType
-			st.MermaidCode = prog.Result.MermaidCode
-			st.MarkdownTable = prog.Result.MarkdownTable
-			st.Summary = prog.Result.Summary
-			st.Confidence = prog.Result.Confidence
-			st.Notes = prog.Result.Notes
-			if prog.Result.RecommendedSkip {
-				st.Skipped = true
-				st.Status = mdpolish.StatusSkipped
-				st.SkipReason = "VLM 判定为非架构装饰/界面图"
-			}
-			fmt.Fprintf(os.Stderr, "  - [%d/%d] %s 完成 (%s / %s)\n", prog.Done, prog.Total, prog.ImageID, st.Category, st.Confidence)
-		})
+			codeResults := vlm.ProcessCodePolishBatch(context.Background(), client, codeInputs, cfg.VLM.MaxConcurrency, nil)
+			applied := mdpolish.ApplyCodePolishResults(doc, codeTasks, codeResults)
+			fmt.Fprintf(os.Stderr, "  - 已应用 %d 处代码块精修\n", applied)
+		}
 	} else {
 		fmt.Fprintln(os.Stderr, "[3/4] 跳过 VLM 识图阶段（--no-vlm 或未配置 VLM）")
 	}
@@ -231,6 +250,8 @@ func buildOfflineReviewHTML(title string, states []*mdpolish.ImageState, prepByI
 				html.EscapeString(st.MermaidCode),
 				html.EscapeString(st.MermaidCode),
 			)
+		} else if st.CodeContent != "" {
+			right = fmt.Sprintf(`<pre><code>%s</code></pre>`, html.EscapeString(st.CodeContent))
 		} else if st.MarkdownTable != "" {
 			right = fmt.Sprintf(`<pre><code>%s</code></pre>`, html.EscapeString(st.MarkdownTable))
 		} else {

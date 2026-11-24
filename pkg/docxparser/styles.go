@@ -16,6 +16,7 @@ type StyleInfo struct {
 	IsTOC        bool
 	IsTitle      bool
 	IsCode       bool
+	HasShading   bool
 }
 
 type StyleSheet struct {
@@ -79,6 +80,12 @@ func ParseStyles(data []byte) *StyleSheet {
 						}
 					}
 				}
+			case "shd":
+				if cur != nil && inPPr {
+					if isNonWhiteShading(attrVal(el.Attr, "fill")) {
+						cur.HasShading = true
+					}
+				}
 			}
 		case xml.EndElement:
 			switch el.Name.Local {
@@ -110,8 +117,19 @@ func classifyStyle(s *StyleInfo) {
 	if lowerID == "title" || lowerName == "title" || s.Name == "标题" {
 		s.IsTitle = true
 	}
-	if strings.Contains(lowerID, "code") || strings.Contains(lowerName, "code") || strings.Contains(s.Name, "代码") {
-		s.IsCode = true
+	for _, kw := range []string{"code", "source", "listing", "verbatim", "preformatted", "program"} {
+		if strings.Contains(lowerID, kw) || strings.Contains(lowerName, kw) {
+			s.IsCode = true
+			break
+		}
+	}
+	if !s.IsCode {
+		for _, kw := range []string{"代码", "源码", "程序", "命令行", "终端"} {
+			if strings.Contains(s.Name, kw) {
+				s.IsCode = true
+				break
+			}
+		}
 	}
 	if s.HeadingLevel == 0 {
 		if lvl := extractHeadingLevelFromName(lowerID); lvl > 0 {
@@ -149,13 +167,30 @@ func extractChineseHeadingLevel(s string) int {
 }
 
 func isMonospaceFont(name string) bool {
-	l := strings.ToLower(name)
-	return strings.Contains(l, "consolas") ||
-		strings.Contains(l, "courier") ||
-		strings.Contains(l, "mono") ||
-		strings.Contains(l, "menlo") ||
-		strings.Contains(l, "fira code") ||
-		strings.Contains(l, "source code")
+	l := strings.ToLower(strings.TrimSpace(name))
+	if l == "" {
+		return false
+	}
+	fonts := []string{
+		"consolas", "courier", "mono", "menlo", "monaco",
+		"fira code", "source code", "cascadia", "jetbrains",
+		"inconsolata", "hack", "lucida console", "sf mono",
+		"sarasa", "iosevka", "victor", "operator",
+		"anonymous pro", "ubuntu mono", "dejavu sans mono",
+		"liberation mono", "droid sans mono", "noto sans mono",
+		"roboto mono", "andale", "fixedsys", "terminal",
+	}
+	for _, f := range fonts {
+		if strings.Contains(l, f) {
+			return true
+		}
+	}
+	return false
+}
+
+func isNonWhiteShading(fill string) bool {
+	f := strings.ToLower(strings.TrimSpace(fill))
+	return f != "" && f != "auto" && f != "ffffff" && f != "fff" && f != "none" && f != "clear"
 }
 
 func (ss *StyleSheet) ResolveHeadingLevel(styleID string) int {
@@ -232,6 +267,24 @@ func (ss *StyleSheet) IsCodeStyle(styleID string) bool {
 			return false
 		}
 		if st.IsCode {
+			return true
+		}
+		cur = st.BasedOn
+	}
+	return false
+}
+
+func (ss *StyleSheet) HasShading(styleID string) bool {
+	if styleID == "" || ss == nil {
+		return false
+	}
+	cur := styleID
+	for depth := 0; depth < 16 && cur != ""; depth++ {
+		st, ok := ss.styles[cur]
+		if !ok {
+			return false
+		}
+		if st.HasShading {
 			return true
 		}
 		cur = st.BasedOn

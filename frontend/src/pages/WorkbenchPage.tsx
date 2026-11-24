@@ -120,7 +120,8 @@ export const WorkbenchPage: React.FC<WorkbenchPageProps> = ({ routePrefix }) => 
           img.skipped ||
           img.status === 'skipped' ||
           img.keep_original ||
-          img.category === 'table_screenshot'
+          img.category === 'table_screenshot' ||
+          img.category === 'code_screenshot'
         ) {
           continue;
         }
@@ -348,7 +349,7 @@ export const WorkbenchPage: React.FC<WorkbenchPageProps> = ({ routePrefix }) => 
             <span className="code-markdocx-pill is-info">
               <Loader2 size={14} className="code-markdocx-spin" />
               <span>
-                VLM 转译中 ({job.progress_done}/{job.progress_total})
+                AI 转译中 ({job.progress_done}/{job.progress_total})
               </span>
             </span>
           )}

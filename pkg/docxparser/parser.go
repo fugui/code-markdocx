@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 type relTarget struct {
@@ -76,6 +77,7 @@ func parseSafeZip(sz *SafeZip, opts ParseOptions) (*DocumentIR, error) {
 	if err := p.walkDocument(docBytes); err != nil {
 		return nil, err
 	}
+	p.finalizeBlocks()
 	p.populateImageContexts()
 	return p.ir, nil
 }
@@ -132,6 +134,7 @@ type docWalker struct {
 	rels         map[string]relTarget
 	opts         ParseOptions
 	ir           *DocumentIR
+	rawItems     []rawBlockItem
 	headingStack [6]string
 	seenMainHead bool
 	blockCounter int
@@ -168,8 +171,46 @@ func (w *docWalker) walkBodyChildren(nodes []xmlNode) {
 					w.walkBodyChildren(sub.Nodes)
 				}
 			}
+		case "AlternateContent":
+			for _, chosen := range pickAlternateContent(n) {
+				w.walkBodyChildren(chosen.Nodes)
+			}
 		}
 	}
+}
+
+func pickAlternateContent(n xmlNode) []xmlNode {
+	var choiceNodes, fallbackNodes []xmlNode
+	for _, c := range n.Nodes {
+		switch c.XMLName.Local {
+		case "Choice":
+			choiceNodes = append(choiceNodes, c)
+		case "Fallback":
+			fallbackNodes = append(fallbackNodes, c)
+		}
+	}
+	if len(choiceNodes) > 0 {
+		return choiceNodes
+	}
+	return fallbackNodes
+}
+
+func (w *docWalker) appendItem(item rawBlockItem) {
+	w.rawItems = append(w.rawItems, item)
+}
+
+func (w *docWalker) finalizeBlocks() {
+	w.ir.Blocks = postProcessCodeBlocks(w.rawItems)
+}
+
+func (w *docWalker) lastNonEmptyText() string {
+	for i := len(w.rawItems) - 1; i >= 0; i-- {
+		txt := strings.TrimSpace(blockSummaryText(w.rawItems[i].block))
+		if txt != "" {
+			return txt
+		}
+	}
+	return ""
 }
 
 func (w *docWalker) handleParagraph(p xmlNode) {
@@ -210,12 +251,12 @@ func (w *docWalker) handleParagraph(p xmlNode) {
 	}
 
 	isTOC := w.styles.IsTOCStyle(styleID)
-	text, imgIDs, tocFieldDetected := w.extractParagraphContent(p)
+	meta, imgIDs, txbxNodes, tocFieldDetected := w.extractParagraphMeta(p, styleID)
 	if tocFieldDetected {
 		isTOC = true
 	}
 
-	trimmed := strings.TrimSpace(text)
+	trimmed := strings.TrimSpace(meta.inlineMD)
 
 	if w.opts.StripTOC && (isTOC || w.inTOCField) {
 		if trimmed != "" {
@@ -232,11 +273,13 @@ func (w *docWalker) handleParagraph(p xmlNode) {
 	if headingLvl == 0 && outlineLvl > 0 {
 		headingLvl = outlineLvl
 	}
-	if headingLvl == 0 && !hasList && trimmed != "" && len(imgIDs) == 0 {
+	hasStrongCodeHint := meta.isCodeStyle || meta.monoRatio >= 0.80 || meta.hasShading || meta.distinctCols >= 2
+	if headingLvl == 0 && !hasList && !hasStrongCodeHint && trimmed != "" && len(imgIDs) == 0 {
 		// Detect common numbered headings when paragraph lacks formal Heading style
-		if m := numberedHeadingRegex.FindStringSubmatch(trimmed); len(m) == 3 {
+		plainTrimmed := strings.TrimSpace(meta.plainText)
+		if m := numberedHeadingRegex.FindStringSubmatch(plainTrimmed); len(m) == 3 {
 			dots := strings.Count(m[1], ".") + 1
-			if dots >= 1 && dots <= 4 && !strings.HasSuffix(trimmed, "。") && !strings.HasSuffix(trimmed, ".") {
+			if dots >= 1 && dots <= 4 && !strings.HasSuffix(plainTrimmed, "。") && !strings.HasSuffix(plainTrimmed, ".") {
 				headingLvl = dots
 			}
 		}
@@ -248,13 +291,18 @@ func (w *docWalker) handleParagraph(p xmlNode) {
 		if w.ir.Title == "" && headingLvl == 1 {
 			w.ir.Title = trimmed
 		}
-		w.ir.Blocks = append(w.ir.Blocks, Block{
-			Kind:  BlockHeading,
-			Level: headingLvl,
-			Text:  trimmed,
+		w.appendItem(rawBlockItem{
+			block: Block{
+				Kind:  BlockHeading,
+				Level: headingLvl,
+				Text:  trimmed,
+			},
 		})
 		for _, imgID := range imgIDs {
-			w.ir.Blocks = append(w.ir.Blocks, Block{Kind: BlockImage, ImageID: imgID})
+			w.appendItem(rawBlockItem{block: Block{Kind: BlockImage, ImageID: imgID}})
+		}
+		for _, tb := range txbxNodes {
+			w.walkBodyChildren(tb.Nodes)
 		}
 		return
 	}
@@ -266,23 +314,41 @@ func (w *docWalker) handleParagraph(p xmlNode) {
 		return
 	}
 
+	if meta.isEmpty && len(imgIDs) == 0 {
+		if len(w.rawItems) > 0 {
+			w.rawItems[len(w.rawItems)-1].blankLinesAfter++
+		}
+		for _, tb := range txbxNodes {
+			w.walkBodyChildren(tb.Nodes)
+		}
+		return
+	}
+
 	if trimmed != "" {
 		if hasList {
-			w.ir.Blocks = append(w.ir.Blocks, Block{
-				Kind:    BlockListItem,
-				Text:    trimmed,
-				Ordered: w.numbering.IsOrdered(numID, ilvl),
-				Indent:  ilvl,
+			w.appendItem(rawBlockItem{
+				block: Block{
+					Kind:    BlockListItem,
+					Text:    trimmed,
+					Ordered: w.numbering.IsOrdered(numID, ilvl),
+					Indent:  ilvl,
+				},
 			})
 		} else {
-			w.ir.Blocks = append(w.ir.Blocks, Block{
-				Kind: BlockParagraph,
-				Text: trimmed,
+			w.appendItem(rawBlockItem{
+				block: Block{
+					Kind: BlockParagraph,
+					Text: trimmed,
+				},
+				meta: &meta,
 			})
 		}
 	}
 	for _, imgID := range imgIDs {
-		w.ir.Blocks = append(w.ir.Blocks, Block{Kind: BlockImage, ImageID: imgID})
+		w.appendItem(rawBlockItem{block: Block{Kind: BlockImage, ImageID: imgID}})
+	}
+	for _, tb := range txbxNodes {
+		w.walkBodyChildren(tb.Nodes)
 	}
 }
 
@@ -306,9 +372,98 @@ func (w *docWalker) currentSectionPath() string {
 	return strings.Join(parts, " > ")
 }
 
-func (w *docWalker) extractParagraphContent(p xmlNode) (string, []string, bool) {
-	var buf strings.Builder
+func (w *docWalker) extractParagraphMeta(p xmlNode, styleID string) (paraMeta, []string, []xmlNode, bool) {
+	meta := paraMeta{
+		styleID:     styleID,
+		isCodeStyle: w.styles.IsCodeStyle(styleID),
+		hasShading:  w.styles.HasShading(styleID),
+	}
+
+	for _, child := range p.Nodes {
+		if child.XMLName.Local != "pPr" {
+			continue
+		}
+		for _, prop := range child.Nodes {
+			switch prop.XMLName.Local {
+			case "pStyle":
+				if meta.styleID == "" {
+					meta.styleID = attrVal(prop.Attrs, "val")
+					meta.isCodeStyle = w.styles.IsCodeStyle(meta.styleID)
+					meta.hasShading = meta.hasShading || w.styles.HasShading(meta.styleID)
+				}
+			case "shd":
+				fill := attrVal(prop.Attrs, "fill")
+				if isNonWhiteShading(fill) {
+					meta.hasShading = true
+					meta.shadingFill = fill
+				}
+			case "pBdr":
+				for _, side := range prop.Nodes {
+					val := strings.ToLower(strings.TrimSpace(attrVal(side.Attrs, "val")))
+					if val != "" && val != "none" && val != "nil" {
+						meta.hasBorder = true
+						break
+					}
+				}
+			case "ind":
+				if leftStr := attrVal(prop.Attrs, "left"); leftStr != "" {
+					if v, err := strconv.Atoi(leftStr); err == nil && v > 0 {
+						meta.indentLeft = v
+					}
+				} else if leftStr := attrVal(prop.Attrs, "start"); leftStr != "" {
+					if v, err := strconv.Atoi(leftStr); err == nil && v > 0 {
+						meta.indentLeft = v
+					}
+				}
+			}
+		}
+	}
+
+	spans, imgIDs, txbxNodes, sawTOC := w.extractParagraphSpans(p)
+	meta.spans = spans
+	meta.plainText = buildPlainCodeText(spans)
+	meta.inlineMD = renderInlineMarkdown(spans)
+	meta.hasSoftBreak = strings.Contains(meta.plainText, "\n")
+	meta.isEmpty = strings.TrimSpace(meta.plainText) == ""
+
+	var asciiTotal, asciiMono, allTotal, allMono int
+	colors := make(map[string]struct{})
+	for _, sp := range spans {
+		hasVisible := false
+		for _, r := range sp.text {
+			if unicode.IsSpace(r) || r == '\u00a0' {
+				continue
+			}
+			hasVisible = true
+			allTotal++
+			if sp.isMono || meta.isCodeStyle {
+				allMono++
+			}
+			if r < 128 {
+				asciiTotal++
+				if sp.isMono || meta.isCodeStyle {
+					asciiMono++
+				}
+			}
+		}
+		if hasVisible && sp.color != "" {
+			colors[sp.color] = struct{}{}
+		}
+	}
+	if asciiTotal > 0 {
+		meta.monoRatio = float64(asciiMono) / float64(asciiTotal)
+	} else if allTotal > 0 {
+		meta.monoRatio = float64(allMono) / float64(allTotal)
+	}
+	meta.distinctCols = len(colors)
+
+	return meta, imgIDs, txbxNodes, sawTOC
+}
+
+func (w *docWalker) extractParagraphSpans(p xmlNode) ([]textSpan, []string, []xmlNode, bool) {
+	var spans []textSpan
 	var imgIDs []string
+	var txbxNodes []xmlNode
 	sawTOC := false
 
 	var walk func(nodes []xmlNode)
@@ -318,45 +473,65 @@ func (w *docWalker) extractParagraphContent(p xmlNode) (string, []string, bool) 
 			case "pPr":
 				continue
 			case "r":
-				runText, runImgs, runTOC := w.extractRun(n)
+				rSpans, runImgs, runTxbx, runTOC := w.extractRun(n)
 				if runTOC {
 					sawTOC = true
 				}
-				buf.WriteString(runText)
+				spans = append(spans, rSpans...)
 				imgIDs = append(imgIDs, runImgs...)
+				txbxNodes = append(txbxNodes, runTxbx...)
 			case "hyperlink":
 				linkID := attrVal(n.Attrs, "id")
-				var linkBuf strings.Builder
+				var linkSpans []textSpan
 				for _, child := range n.Nodes {
 					if child.XMLName.Local == "r" {
-						rt, rImgs, _ := w.extractRun(child)
-						linkBuf.WriteString(rt)
+						rs, rImgs, rTxbx, _ := w.extractRun(child)
+						linkSpans = append(linkSpans, rs...)
 						imgIDs = append(imgIDs, rImgs...)
+						txbxNodes = append(txbxNodes, rTxbx...)
 					}
 				}
-				linkText := strings.TrimSpace(linkBuf.String())
+				linkText := strings.TrimSpace(buildPlainCodeText(linkSpans))
 				if linkText != "" {
 					if rel, ok := w.rels[linkID]; ok && rel.External && rel.Target != "" {
-						buf.WriteString(fmt.Sprintf("[%s](%s)", linkText, rel.Target))
+						spans = append(spans, textSpan{
+							text:  fmt.Sprintf("[%s](%s)", linkText, rel.Target),
+							rawMD: true,
+						})
 					} else {
-						buf.WriteString(linkText)
+						spans = append(spans, linkSpans...)
 					}
 				}
 			case "oMath", "oMathPara":
-				buf.WriteString(extractMathText(n))
+				if mt := extractMathText(n); mt != "" {
+					spans = append(spans, textSpan{text: mt, rawMD: true})
+				}
+			case "br", "cr":
+				brType := strings.ToLower(attrVal(n.Attrs, "type"))
+				if brType == "" || brType == "textwrapping" {
+					spans = append(spans, textSpan{text: "\n"})
+				} else {
+					spans = append(spans, textSpan{text: " "})
+				}
 			case "sdt", "sdtContent", "smartTag", "ins":
 				walk(n.Nodes)
+			case "AlternateContent":
+				for _, chosen := range pickAlternateContent(n) {
+					walk(chosen.Nodes)
+				}
 			}
 		}
 	}
 	walk(p.Nodes)
-	return buf.String(), imgIDs, sawTOC
+	return spans, imgIDs, txbxNodes, sawTOC
 }
 
-func (w *docWalker) extractRun(r xmlNode) (string, []string, bool) {
-	var bold, italic, code bool
+func (w *docWalker) extractRun(r xmlNode) ([]textSpan, []string, []xmlNode, bool) {
+	var bold, italic, code, isMono bool
+	var color string
 	var textBuf strings.Builder
 	var imgIDs []string
+	var txbxNodes []xmlNode
 	sawTOC := false
 
 	for _, n := range r.Nodes {
@@ -377,13 +552,20 @@ func (w *docWalker) extractRun(r xmlNode) (string, []string, bool) {
 				case "rStyle":
 					if w.styles.IsCodeStyle(attrVal(rp.Attrs, "val")) {
 						code = true
+						isMono = true
 					}
 				case "rFonts":
 					for _, a := range rp.Attrs {
 						if isMonospaceFont(a.Value) {
 							code = true
+							isMono = true
 							break
 						}
+					}
+				case "color":
+					val := strings.ToLower(strings.TrimSpace(attrVal(rp.Attrs, "val")))
+					if val != "" && val != "auto" && val != "000000" && val != "ffffff" && val != "000" && val != "fff" {
+						color = val
 					}
 				}
 			}
@@ -415,11 +597,16 @@ func (w *docWalker) extractRun(r xmlNode) (string, []string, bool) {
 			}
 		case "tab":
 			if !w.inInstrText {
-				textBuf.WriteString(" ")
+				textBuf.WriteByte('\t')
 			}
 		case "br", "cr":
 			if !w.inInstrText {
-				textBuf.WriteString(" ")
+				brType := strings.ToLower(attrVal(n.Attrs, "type"))
+				if brType == "" || brType == "textwrapping" {
+					textBuf.WriteByte('\n')
+				} else {
+					textBuf.WriteByte(' ')
+				}
 			}
 		case "drawing", "pict":
 			rIDs := collectImageRelIDs(n)
@@ -428,35 +615,166 @@ func (w *docWalker) extractRun(r xmlNode) (string, []string, bool) {
 					imgIDs = append(imgIDs, id)
 				}
 			}
+			txbxNodes = append(txbxNodes, collectTextBoxContents(n)...)
+		case "AlternateContent":
+			for _, chosen := range pickAlternateContent(n) {
+				for _, cn := range chosen.Nodes {
+					if cn.XMLName.Local == "drawing" || cn.XMLName.Local == "pict" {
+						for _, rid := range collectImageRelIDs(cn) {
+							if id := w.registerImageRel(rid); id != "" {
+								imgIDs = append(imgIDs, id)
+							}
+						}
+						txbxNodes = append(txbxNodes, collectTextBoxContents(cn)...)
+					}
+				}
+			}
 		}
 	}
 
 	raw := textBuf.String()
-	if strings.TrimSpace(raw) == "" {
-		return raw, imgIDs, sawTOC
+	if raw == "" {
+		return nil, imgIDs, txbxNodes, sawTOC
 	}
-	trimmed := strings.TrimSpace(raw)
-	leadSpace := ""
-	trailSpace := ""
-	if strings.HasPrefix(raw, " ") {
-		leadSpace = " "
+	return []textSpan{{
+		text:   raw,
+		bold:   bold,
+		italic: italic,
+		code:   code,
+		isMono: isMono,
+		color:  color,
+	}}, imgIDs, txbxNodes, sawTOC
+}
+
+func collectTextBoxContents(node xmlNode) []xmlNode {
+	var out []xmlNode
+	var walk func(n xmlNode)
+	walk = func(n xmlNode) {
+		if n.XMLName.Local == "txbxContent" {
+			out = append(out, n)
+			return
+		}
+		if n.XMLName.Local == "AlternateContent" {
+			for _, chosen := range pickAlternateContent(n) {
+				walk(chosen)
+			}
+			return
+		}
+		for _, c := range n.Nodes {
+			walk(c)
+		}
 	}
-	if strings.HasSuffix(raw, " ") {
-		trailSpace = " "
+	walk(node)
+	return out
+}
+
+func buildPlainCodeText(spans []textSpan) string {
+	var b strings.Builder
+	for _, sp := range spans {
+		b.WriteString(sp.text)
 	}
-	if code && !strings.Contains(trimmed, "`") {
-		return leadSpace + "`" + trimmed + "`" + trailSpace, imgIDs, sawTOC
+	s := strings.ReplaceAll(b.String(), "\r\n", "\n")
+	s = strings.ReplaceAll(s, "\r", "\n")
+	s = strings.ReplaceAll(s, "\u00a0", " ")
+	s = strings.ReplaceAll(s, "\t", "    ")
+	return s
+}
+
+func renderInlineMarkdown(spans []textSpan) string {
+	if len(spans) == 0 {
+		return ""
 	}
-	if bold && italic {
-		return leadSpace + "***" + trimmed + "***" + trailSpace, imgIDs, sawTOC
+	norm := func(s string) string {
+		r := strings.NewReplacer("\r\n", " ", "\r", " ", "\n", " ", "\t", " ", "\u00a0", " ")
+		return r.Replace(s)
 	}
-	if bold {
-		return leadSpace + "**" + trimmed + "**" + trailSpace, imgIDs, sawTOC
+
+	var merged []textSpan
+	for _, sp := range spans {
+		txt := sp.text
+		if !sp.rawMD {
+			txt = norm(txt)
+		}
+		if txt == "" {
+			continue
+		}
+		cur := textSpan{
+			text:   txt,
+			bold:   sp.bold,
+			italic: sp.italic,
+			code:   sp.code,
+			isMono: sp.isMono,
+			rawMD:  sp.rawMD,
+		}
+		if len(merged) > 0 {
+			prev := &merged[len(merged)-1]
+			if !prev.rawMD && !cur.rawMD &&
+				prev.bold == cur.bold && prev.italic == cur.italic && prev.code == cur.code {
+				prev.text += cur.text
+				continue
+			}
+		}
+		merged = append(merged, cur)
 	}
-	if italic {
-		return leadSpace + "*" + trimmed + "*" + trailSpace, imgIDs, sawTOC
+
+	var out strings.Builder
+	for _, sp := range merged {
+		if sp.rawMD {
+			out.WriteString(sp.text)
+			continue
+		}
+		if strings.TrimSpace(sp.text) == "" {
+			out.WriteString(sp.text)
+			continue
+		}
+		trimmed := strings.TrimSpace(sp.text)
+		lead := ""
+		trail := ""
+		if strings.HasPrefix(sp.text, " ") {
+			lead = " "
+		}
+		if strings.HasSuffix(sp.text, " ") {
+			trail = " "
+		}
+		switch {
+		case sp.code:
+			out.WriteString(lead)
+			out.WriteString(wrapInlineCode(trimmed))
+			out.WriteString(trail)
+		case sp.bold && sp.italic:
+			out.WriteString(lead + "***" + trimmed + "***" + trail)
+		case sp.bold:
+			out.WriteString(lead + "**" + trimmed + "**" + trail)
+		case sp.italic:
+			out.WriteString(lead + "*" + trimmed + "*" + trail)
+		default:
+			out.WriteString(sp.text)
+		}
 	}
-	return raw, imgIDs, sawTOC
+	return out.String()
+}
+
+func wrapInlineCode(s string) string {
+	if !strings.Contains(s, "`") {
+		return "`" + s + "`"
+	}
+	maxRun := 0
+	cur := 0
+	for _, r := range s {
+		if r == '`' {
+			cur++
+			if cur > maxRun {
+				maxRun = cur
+			}
+		} else {
+			cur = 0
+		}
+	}
+	ticks := strings.Repeat("`", maxRun+1)
+	if strings.HasPrefix(s, "`") || strings.HasSuffix(s, "`") {
+		return ticks + " " + s + " " + ticks
+	}
+	return ticks + s + ticks
 }
 
 func collectImageRelIDs(node xmlNode) []string {
@@ -513,9 +831,17 @@ func (w *docWalker) registerImageRel(relID string) string {
 	return id
 }
 
+type tableCellData struct {
+	inlineText string
+	codeLines  []string
+	metas      []*paraMeta
+	hasShading bool
+}
+
 func (w *docWalker) handleTable(tbl xmlNode) {
 	w.blockCounter++
 	var rows [][]string
+	var cellGrid [][]tableCellData
 	// Track active vertical merges by column index
 	activeVMerge := make(map[int]string)
 
@@ -524,6 +850,7 @@ func (w *docWalker) handleTable(tbl xmlNode) {
 			continue
 		}
 		var row []string
+		var cellRow []tableCellData
 		colIdx := 0
 		for _, tc := range child.Nodes {
 			if tc.XMLName.Local != "tc" {
@@ -531,7 +858,10 @@ func (w *docWalker) handleTable(tbl xmlNode) {
 			}
 			span := 1
 			vMergeState := "" // "" | "restart" | "continue"
+			cellShading := false
 			var cellParas []string
+			var codeLines []string
+			var metas []*paraMeta
 			for _, tcChild := range tc.Nodes {
 				switch tcChild.XMLName.Local {
 				case "tcPr":
@@ -548,13 +878,30 @@ func (w *docWalker) handleTable(tbl xmlNode) {
 							} else {
 								vMergeState = "continue"
 							}
+						case "shd":
+							if isNonWhiteShading(attrVal(tp.Attrs, "fill")) {
+								cellShading = true
+							}
 						}
 					}
 				case "p":
-					txt, _, _ := w.extractParagraphContent(tcChild)
-					if t := strings.TrimSpace(txt); t != "" {
+					var pStyleID string
+					for _, pn := range tcChild.Nodes {
+						if pn.XMLName.Local == "pPr" {
+							for _, pr := range pn.Nodes {
+								if pr.XMLName.Local == "pStyle" {
+									pStyleID = attrVal(pr.Attrs, "val")
+								}
+							}
+						}
+					}
+					pm, _, _, _ := w.extractParagraphMeta(tcChild, pStyleID)
+					if t := strings.TrimSpace(pm.inlineMD); t != "" {
 						cellParas = append(cellParas, t)
 					}
+					codeLines = append(codeLines, pm.plainText)
+					pmCopy := pm
+					metas = append(metas, &pmCopy)
 				}
 			}
 			cellText := strings.Join(cellParas, "<br>")
@@ -571,13 +918,21 @@ func (w *docWalker) handleTable(tbl xmlNode) {
 			}
 
 			row = append(row, cellText)
+			cellRow = append(cellRow, tableCellData{
+				inlineText: cellText,
+				codeLines:  codeLines,
+				metas:      metas,
+				hasShading: cellShading,
+			})
 			for i := 1; i < span; i++ {
 				row = append(row, "")
+				cellRow = append(cellRow, tableCellData{})
 			}
 			colIdx += span
 		}
 		if len(row) > 0 {
 			rows = append(rows, row)
+			cellGrid = append(cellGrid, cellRow)
 		}
 	}
 
@@ -607,10 +962,134 @@ func (w *docWalker) handleTable(tbl xmlNode) {
 		return
 	}
 
-	w.ir.Blocks = append(w.ir.Blocks, Block{
-		Kind:      BlockTable,
-		TableRows: rows,
+	if blk, ok := w.tryUnwrapCodeTable(cellGrid, maxCols); ok {
+		w.appendItem(rawBlockItem{block: blk})
+		return
+	}
+
+	w.appendItem(rawBlockItem{
+		block: Block{
+			Kind:      BlockTable,
+			TableRows: rows,
+		},
 	})
+}
+
+func (w *docWalker) tryUnwrapCodeTable(grid [][]tableCellData, cols int) (Block, bool) {
+	if len(grid) == 0 {
+		return Block{}, false
+	}
+
+	// Case 1: 1x1 code-box table
+	if len(grid) == 1 && cols == 1 {
+		cell := grid[0][0]
+		rawCode := buildTableCellCodeText(cell)
+		cleaned := dedentCode(rawCode)
+		if cleaned == "" || isNaturalLanguageCallout(cleaned) {
+			return Block{}, false
+		}
+		hasFormatSignal := cell.hasShading || hasCellCodeFormatting(cell)
+		if (hasFormatSignal && (isHighConfidenceCodeBlock(cleaned) || hasCellStrongCodeStyle(cell))) ||
+			(!hasFormatSignal && isMultiLineCodeText(cleaned) && isHighConfidenceCodeBlock(cleaned)) {
+			return Block{
+				Kind:     BlockCode,
+				Text:     cleaned,
+				Language: DetectCodeLanguage(cleaned, w.lastNonEmptyText()),
+			}, true
+		}
+		return Block{}, false
+	}
+
+	// Case 2: 1x2 (line numbers in col 0, code in col 1) or Nx2 (each row is lineNo | codeLine)
+	if cols == 2 && len(grid[0]) == 2 {
+		var numLines []string
+		var codeLines []string
+		var metas []*paraMeta
+		hasSignal := false
+		for _, row := range grid {
+			if len(row) < 2 {
+				return Block{}, false
+			}
+			for _, l := range row[0].codeLines {
+				for _, sub := range strings.Split(l, "\n") {
+					if t := strings.TrimSpace(sub); t != "" {
+						numLines = append(numLines, t)
+					}
+				}
+			}
+			if row[1].hasShading || hasCellCodeFormatting(row[1]) {
+				hasSignal = true
+			}
+			codeLines = append(codeLines, buildTableCellCodeText(row[1]))
+			metas = append(metas, row[1].metas...)
+		}
+		if isSequentialLineNumbers(numLines) {
+			cleaned := dedentCode(strings.Join(codeLines, "\n"))
+			if cleaned != "" && !isNaturalLanguageCallout(cleaned) && (hasSignal || isHighConfidenceCodeBlock(cleaned) || len(metas) >= 2) {
+				return Block{
+					Kind:     BlockCode,
+					Text:     cleaned,
+					Language: DetectCodeLanguage(cleaned, w.lastNonEmptyText()),
+				}, true
+			}
+		}
+	}
+
+	return Block{}, false
+}
+
+func buildTableCellCodeText(cell tableCellData) string {
+	lines := applyRelativeIndent(cell.metas, cell.codeLines)
+	return strings.Join(lines, "\n")
+}
+
+func hasCellStrongCodeStyle(cell tableCellData) bool {
+	for _, m := range cell.metas {
+		if m != nil && (m.isCodeStyle || m.monoRatio >= 0.7) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasCellCodeFormatting(cell tableCellData) bool {
+	if len(cell.metas) == 0 {
+		return false
+	}
+	nonEmpty := 0
+	hits := 0
+	for _, m := range cell.metas {
+		if m == nil || m.isEmpty {
+			continue
+		}
+		nonEmpty++
+		if m.isCodeStyle || m.hasShading || m.monoRatio >= 0.7 || m.distinctCols >= 2 {
+			hits++
+		}
+	}
+	return nonEmpty > 0 && hits*2 >= nonEmpty
+}
+
+func isSequentialLineNumbers(nums []string) bool {
+	if len(nums) < 2 {
+		return false
+	}
+	prev := -1
+	for _, s := range nums {
+		n, err := strconv.Atoi(strings.TrimSpace(s))
+		if err != nil {
+			return false
+		}
+		if prev == -1 {
+			if n != 0 && n != 1 {
+				return false
+			}
+		} else if n != prev+1 {
+			return false
+		}
+		prev = n
+	}
+	return true
 }
 
 func isRevisionHistoryTable(headerRow []string) bool {
@@ -690,6 +1169,13 @@ func blockSummaryText(b Block) string {
 	switch b.Kind {
 	case BlockHeading, BlockParagraph, BlockListItem:
 		return strings.TrimSpace(b.Text)
+	case BlockCode:
+		header := "[代码块"
+		if b.Language != "" {
+			header += ": " + b.Language
+		}
+		header += "] "
+		return header + truncateRunes(strings.TrimSpace(b.Text), 180)
 	case BlockTable:
 		if len(b.TableRows) > 0 {
 			return "[表格: " + strings.Join(b.TableRows[0], " | ") + "]"

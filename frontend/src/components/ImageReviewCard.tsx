@@ -30,6 +30,8 @@ export interface ImageReviewCardProps {
       diagram_type?: DiagramType;
       mermaid_code?: string;
       markdown_table?: string;
+      code_language?: string;
+      code_content?: string;
       summary?: string;
       skipped?: boolean;
       keep_original?: boolean;
@@ -45,6 +47,7 @@ const CATEGORY_LABELS: Record<DiagramCategory, string> = {
   uml_diagram: 'UML 图表',
   complex_arch: '复杂架构图 (骨架)',
   table_screenshot: '表格截图',
+  code_screenshot: '代码截图',
   ui_or_decorative: '界面 / 装饰图',
 };
 
@@ -65,6 +68,8 @@ export const ImageReviewCard: React.FC<ImageReviewCardProps> = ({
   );
   const [mermaidCode, setMermaidCode] = useState(image.mermaid_code || '');
   const [markdownTable, setMarkdownTable] = useState(image.markdown_table || '');
+  const [codeLanguage, setCodeLanguage] = useState(image.code_language || '');
+  const [codeContent, setCodeContent] = useState(image.code_content || '');
   const [summary, setSummary] = useState(image.summary || '');
   const [instruction, setInstruction] = useState('');
   const [saving, setSaving] = useState(false);
@@ -76,12 +81,16 @@ export const ImageReviewCard: React.FC<ImageReviewCardProps> = ({
     setDiagramType(image.diagram_type || 'flowchart');
     setMermaidCode(image.mermaid_code || '');
     setMarkdownTable(image.markdown_table || '');
+    setCodeLanguage(image.code_language || '');
+    setCodeContent(image.code_content || '');
     setSummary(image.summary || '');
   }, [
     image.category,
     image.diagram_type,
     image.mermaid_code,
     image.markdown_table,
+    image.code_language,
+    image.code_content,
     image.summary,
   ]);
 
@@ -90,10 +99,13 @@ export const ImageReviewCard: React.FC<ImageReviewCardProps> = ({
   const isKeepOriginal = !isSkipped && Boolean(image.keep_original && image.asset_filename);
   const canKeepOriginal = Boolean(image.has_image_file && image.asset_filename && !image.unsupported_vector);
   const isTable = category === 'table_screenshot';
+  const isCode = category === 'code_screenshot';
   const hasEdits = isKeepOriginal
     ? summary !== (image.summary || '')
     : mermaidCode !== (image.mermaid_code || '') ||
       markdownTable !== (image.markdown_table || '') ||
+      codeLanguage !== (image.code_language || '') ||
+      codeContent !== (image.code_content || '') ||
       summary !== (image.summary || '') ||
       category !== (image.category || 'uml_diagram') ||
       diagramType !== (image.diagram_type || 'flowchart');
@@ -110,6 +122,8 @@ export const ImageReviewCard: React.FC<ImageReviewCardProps> = ({
               diagram_type: diagramType,
               mermaid_code: mermaidCode,
               markdown_table: markdownTable,
+              code_language: codeLanguage,
+              code_content: codeContent,
               summary,
               skipped: false,
             },
@@ -356,7 +370,7 @@ export const ImageReviewCard: React.FC<ImageReviewCardProps> = ({
                 </div>
               )}
 
-              {syntaxError && !isTable && (
+              {syntaxError && !isTable && !isCode && (
                 <div className="code-markdocx-alert is-danger">
                   <AlertTriangle size={16} />
                   <div className="code-markdocx-syntax-err-body">
@@ -383,7 +397,7 @@ export const ImageReviewCard: React.FC<ImageReviewCardProps> = ({
                 </div>
               )}
 
-              {!isTable && mermaidCode.trim() && !syntaxError && (
+              {!isTable && !isCode && mermaidCode.trim() && !syntaxError && (
                 <div className="code-markdocx-mermaid-preview">
                   <div className="code-markdocx-syntax-ok">
                     <CheckCircle2 size={14} />
@@ -408,10 +422,11 @@ export const ImageReviewCard: React.FC<ImageReviewCardProps> = ({
                     <option value="uml_diagram">UML 图表</option>
                     <option value="complex_arch">复杂架构图</option>
                     <option value="table_screenshot">表格截图</option>
+                    <option value="code_screenshot">代码截图</option>
                     <option value="ui_or_decorative">界面/装饰图</option>
                   </select>
                 </label>
-                {!isTable && (
+                {!isTable && !isCode && (
                   <label className="code-markdocx-field">
                     <span>图类型</span>
                     <select
@@ -427,6 +442,18 @@ export const ImageReviewCard: React.FC<ImageReviewCardProps> = ({
                     </select>
                   </label>
                 )}
+                {isCode && (
+                  <label className="code-markdocx-field">
+                    <span>代码语言（可选）</span>
+                    <input
+                      type="text"
+                      className="code-markdocx-input"
+                      value={codeLanguage}
+                      onChange={(e) => setCodeLanguage(e.target.value)}
+                      placeholder="go / python / sql / json"
+                    />
+                  </label>
+                )}
               </div>
 
               {isTable ? (
@@ -437,6 +464,17 @@ export const ImageReviewCard: React.FC<ImageReviewCardProps> = ({
                     className="code-markdocx-code-textarea"
                     value={markdownTable}
                     onChange={(e) => setMarkdownTable(e.target.value)}
+                  />
+                </label>
+              ) : isCode ? (
+                <label className="code-markdocx-field">
+                  <span>提取的代码源码（支持直接微调）</span>
+                  <textarea
+                    rows={8}
+                    className="code-markdocx-code-textarea"
+                    value={codeContent}
+                    onChange={(e) => setCodeContent(e.target.value)}
+                    placeholder="func main() { ... }"
                   />
                 </label>
               ) : (

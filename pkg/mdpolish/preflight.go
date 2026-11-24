@@ -40,6 +40,7 @@ type PreflightReport struct {
 	LineCount         int               `json:"line_count"`
 	HeadingCount      int               `json:"heading_count"`
 	MermaidBlockCount int               `json:"mermaid_block_count"`
+	CodeBlockCount    int               `json:"code_block_count"`
 	HasInlineBase64   bool              `json:"has_inline_base64"`
 	ImageStats        ImageStats        `json:"image_stats"`
 	SecretWarnings    []SecretWarning   `json:"secret_warnings"`
@@ -95,16 +96,22 @@ func Analyze(markdown string, states []*ImageState, maxBytes int64) PreflightRep
 	}
 	rep.LineCount = len(lines)
 
-	inFence := false
+	var activeFence fenceMarker
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~") {
-			if !inFence && strings.HasPrefix(trimmed, "```mermaid") {
-				rep.MermaidBlockCount++
+		if !activeFence.active {
+			if fm, info, ok := parseFenceOpen(trimmed); ok {
+				activeFence = fm
+				if strings.EqualFold(info, "mermaid") {
+					rep.MermaidBlockCount++
+				} else {
+					rep.CodeBlockCount++
+				}
+			} else if strings.HasPrefix(trimmed, "#") {
+				rep.HeadingCount++
 			}
-			inFence = !inFence
-		} else if !inFence && strings.HasPrefix(trimmed, "#") {
-			rep.HeadingCount++
+		} else if isFenceClose(trimmed, activeFence) {
+			activeFence = fenceMarker{}
 		}
 
 		lineNo := i + 1

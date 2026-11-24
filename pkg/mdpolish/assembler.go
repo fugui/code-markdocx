@@ -41,6 +41,8 @@ type ImageState struct {
 	DiagramType       vlm.DiagramType     `json:"diagram_type,omitempty"`
 	MermaidCode       string              `json:"mermaid_code,omitempty"`
 	MarkdownTable     string              `json:"markdown_table,omitempty"`
+	CodeLanguage      string              `json:"code_language,omitempty"`
+	CodeContent       string              `json:"code_content,omitempty"`
 	Summary           string              `json:"summary,omitempty"`
 	Confidence        vlm.ConfidenceLevel `json:"confidence,omitempty"`
 	Notes             string              `json:"notes,omitempty"`
@@ -99,6 +101,13 @@ func Assemble(doc *docxparser.DocumentIR, states map[string]*ImageState) string 
 			tbl := renderGFMTable(blk.TableRows)
 			if tbl != "" {
 				out = append(out, tbl)
+				prevKind = blk.Kind
+				lastRenderedCaption = ""
+			}
+
+		case docxparser.BlockCode:
+			if fenced := renderFencedCode(blk.Language, blk.Text); fenced != "" {
+				out = append(out, fenced)
 				prevKind = blk.Kind
 				lastRenderedCaption = ""
 			}
@@ -176,7 +185,8 @@ func IsUnconvertedToStructured(st *ImageState) bool {
 		return true
 	}
 	hasTable := st.Category == vlm.CategoryTableShot && strings.TrimSpace(st.MarkdownTable) != ""
-	return strings.TrimSpace(st.MermaidCode) == "" && !hasTable
+	hasCode := st.Category == vlm.CategoryCodeShot && strings.TrimSpace(st.CodeContent) != ""
+	return strings.TrimSpace(st.MermaidCode) == "" && !hasTable && !hasCode
 }
 
 func renderImageBlock(st *ImageState) string {
@@ -237,6 +247,13 @@ func renderImageBlock(st *ImageState) string {
 		if sum := strings.TrimSpace(st.Summary); sum != "" {
 			parts = append(parts, "> 图表说明："+sum)
 		}
+	case vlm.CategoryCodeShot:
+		if code := renderFencedCode(st.CodeLanguage, st.CodeContent); code != "" {
+			parts = append(parts, code)
+		}
+		if sum := strings.TrimSpace(st.Summary); sum != "" {
+			parts = append(parts, "> 图表说明："+sum)
+		}
 	case vlm.CategoryUIOrDecorative:
 		if sum := strings.TrimSpace(st.Summary); sum != "" {
 			parts = append(parts, "> [界面/辅助图示] "+sum)
@@ -251,4 +268,31 @@ func renderImageBlock(st *ImageState) string {
 	}
 
 	return strings.Join(parts, "\n\n")
+}
+
+func renderFencedCode(lang, code string) string {
+	normalized := strings.ReplaceAll(code, "\r\n", "\n")
+	normalized = strings.ReplaceAll(normalized, "\r", "\n")
+	normalized = strings.TrimRight(normalized, "\n")
+	if strings.TrimSpace(normalized) == "" {
+		return ""
+	}
+	maxTicks := 0
+	curTicks := 0
+	for _, r := range normalized {
+		if r == '`' {
+			curTicks++
+			if curTicks > maxTicks {
+				maxTicks = curTicks
+			}
+		} else {
+			curTicks = 0
+		}
+	}
+	fenceLen := 3
+	if maxTicks >= 3 {
+		fenceLen = maxTicks + 1
+	}
+	fence := strings.Repeat("`", fenceLen)
+	return fence + strings.TrimSpace(lang) + "\n" + normalized + "\n" + fence
 }

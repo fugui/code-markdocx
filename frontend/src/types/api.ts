@@ -2,6 +2,7 @@ export type DiagramCategory =
   | 'uml_diagram'
   | 'complex_arch'
   | 'table_screenshot'
+  | 'code_screenshot'
   | 'ui_or_decorative';
 
 export type DiagramType =
@@ -70,6 +71,8 @@ export interface ImageState {
   diagram_type?: DiagramType;
   mermaid_code?: string;
   markdown_table?: string;
+  code_language?: string;
+  code_content?: string;
   summary?: string;
   confidence?: ConfidenceLevel;
   notes?: string;
@@ -107,6 +110,7 @@ export interface PreflightReport {
   line_count: number;
   heading_count: number;
   mermaid_block_count: number;
+  code_block_count?: number;
   has_inline_base64: boolean;
   image_stats: ImageStats;
   secret_warnings: SecretWarning[];

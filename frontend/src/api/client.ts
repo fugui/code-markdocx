@@ -107,6 +107,8 @@ export interface PatchImageParams {
   diagram_type?: DiagramType;
   mermaid_code?: string;
   markdown_table?: string;
+  code_language?: string;
+  code_content?: string;
   summary?: string;
   skipped?: boolean;
   keep_original?: boolean;
