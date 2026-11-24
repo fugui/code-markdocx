@@ -1,0 +1,13 @@
+# Binaries & build artifacts
+code-markdocx-server
+*.exe
+*.out
+
+# Local secrets & runtime temp storage
+config.yaml
+tmp_jobs/
+
+# Frontend build & dependencies
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/

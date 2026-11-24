@@ -1,0 +1,108 @@
+package vlm
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+func TestConvertImageWithFencedJSONAndRetry(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := calls.Add(1)
+		if n == 1 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = w.Write([]byte(`{"error":{"message":"rate limited"}}`))
+			return
+		}
+		var req map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode req: %v", err)
+		}
+		resp := map[string]any{
+			"choices": []map[string]any{
+				{
+					"message": map[string]string{
+						"content": "```json\n{\"category\":\"uml_diagram\",\"diagram_type\":\"sequence\",\"mermaid_code\":\"```mermaid\\nsequenceDiagram\\n  Client->>Auth: Login\\n```\",\"summary\":\"客户端向认证服务发起登录请求。\",\"confidence\":\"high\",\"recommended_skip\":false}\n```",
+					},
+				},
+			},
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer srv.Close()
+
+	client := NewClient(ClientConfig{
+		BaseURL:    srv.URL,
+		APIKey:     "sk-test",
+		Model:      "gpt-4o",
+		Timeout:    5 * time.Second,
+		MaxRetries: 2,
+	})
+
+	res, err := client.ConvertImage(context.Background(), ConvertImageInput{
+		ImageID:     "img-001",
+		ImageBytes:  []byte{0x89, 0x50, 0x4E, 0x47},
+		ContentType: "image/png",
+		SectionPath: "1. 登录",
+		Caption:     "图 1 登录时序",
+	})
+	if err != nil {
+		t.Fatalf("ConvertImage failed: %v", err)
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("expected 2 calls due to 429 retry, got %d", calls.Load())
+	}
+	if res.Category != CategoryUMLDiagram || res.DiagramType != DiagramSequence {
+		t.Fatalf("unexpected category/type: %s/%s", res.Category, res.DiagramType)
+	}
+	if res.MermaidCode != "sequenceDiagram\n  Client->>Auth: Login" {
+		t.Fatalf("expected stripped mermaid code, got %q", res.MermaidCode)
+	}
+}
+
+func TestRepairImageIncludesErrorAndInstruction(t *testing.T) {
+	var seenUserText string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Messages []struct {
+				Role    string          `json:"role"`
+				Content json.RawMessage `json:"content"`
+			} `json:"messages"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if len(req.Messages) == 2 {
+			seenUserText = string(req.Messages[1].Content)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{"message": map[string]string{"content": `{"category":"uml_diagram","diagram_type":"flowchart","mermaid_code":"flowchart TD\n  A[\"网关 (Gateway)\"] --> B[Auth]","summary":"修复后流程图","confidence":"high"}`}},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	client := NewClient(ClientConfig{BaseURL: srv.URL, Model: "gpt-4o"})
+	res, err := client.RepairImage(context.Background(), RepairImageInput{
+		ConvertImageInput: ConvertImageInput{
+			ImageID:    "img-002",
+			ImageBytes: []byte{1, 2, 3},
+		},
+		PreviousResult: &VLMResult{MermaidCode: "flowchart TD\n  A[网关(Gateway)] --> B"},
+		MermaidError:   "Parse error on line 2: unexpected token",
+		Instruction:    "请用双引号包裹中文括号标签",
+	})
+	if err != nil {
+		t.Fatalf("RepairImage failed: %v", err)
+	}
+	if res.DiagramType != DiagramFlowchart {
+		t.Fatalf("expected flowchart, got %s", res.DiagramType)
+	}
+	if seenUserText == "" {
+		t.Fatalf("expected repair user prompt payload")
+	}
+}

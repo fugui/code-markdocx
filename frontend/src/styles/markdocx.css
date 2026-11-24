@@ -1,0 +1,793 @@
+.code-markdocx-root {
+  color: var(--color-text-primary);
+  font-family: var(--font-family-sans);
+  min-height: 100%;
+}
+
+.code-markdocx-root.is-standalone {
+  background: var(--color-bg-app);
+  min-height: 100vh;
+}
+
+.code-markdocx-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 1.5rem;
+  background: var(--color-bg-surface);
+  border-bottom: 1px solid var(--color-border-primary);
+}
+
+.code-markdocx-topbar-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 600;
+}
+
+.code-markdocx-brand-title {
+  font-size: 1rem;
+}
+
+.code-markdocx-brand-sub {
+  font-size: 0.75rem;
+  color: var(--color-text-secondary);
+  padding: 0.125rem 0.5rem;
+  border-radius: var(--radius-full);
+  background: var(--color-bg-muted);
+  border: 1px solid var(--color-border-subtle);
+}
+
+.code-markdocx-topbar-nav {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.code-markdocx-nav-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.375rem 0.75rem;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  text-decoration: none;
+  font-size: 0.875rem;
+  transition: var(--transition-fast);
+}
+
+.code-markdocx-nav-link:hover,
+.code-markdocx-nav-link.is-active {
+  color: var(--color-primary);
+  background: var(--color-primary-subtle);
+}
+
+.code-markdocx-main,
+.code-markdocx-root.is-embedded {
+  padding: 1.25rem;
+}
+
+.code-markdocx-container {
+  max-width: 1360px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.code-markdocx-card {
+  background: var(--color-bg-surface);
+  border: 1px solid var(--color-border-primary);
+  border-radius: var(--radius-lg);
+  padding: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.code-markdocx-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.code-markdocx-section-title {
+  margin: 0 0 0.25rem;
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+.code-markdocx-muted {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: 0.84rem;
+}
+
+.code-markdocx-health-pills {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.code-markdocx-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.2rem 0.6rem;
+  border-radius: var(--radius-full);
+  font-size: 0.75rem;
+  font-weight: 500;
+  background: var(--color-bg-muted);
+  color: var(--color-text-secondary);
+  border: 1px solid var(--color-border-primary);
+}
+
+.code-markdocx-pill.is-success {
+  background: var(--color-success-subtle);
+  color: var(--color-success);
+  border-color: var(--color-success-border);
+}
+
+.code-markdocx-pill.is-warning {
+  background: var(--color-warning-subtle);
+  color: var(--color-warning);
+  border-color: var(--color-warning-border);
+}
+
+.code-markdocx-pill.is-danger {
+  background: var(--color-danger-subtle);
+  color: var(--color-danger);
+  border-color: var(--color-danger-border);
+}
+
+.code-markdocx-pill.is-info {
+  background: var(--color-info-subtle);
+  color: var(--color-info);
+  border-color: var(--color-info-border);
+}
+
+.code-markdocx-alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.75rem 0.9rem;
+  border-radius: var(--radius-md);
+  font-size: 0.84rem;
+}
+
+.code-markdocx-alert.is-warning {
+  background: var(--color-warning-subtle);
+  border: 1px solid var(--color-warning-border);
+  color: var(--color-warning);
+}
+
+.code-markdocx-alert.is-danger {
+  background: var(--color-danger-subtle);
+  border: 1px solid var(--color-danger-border);
+  color: var(--color-danger);
+}
+
+.code-markdocx-dropzone {
+  border: 2px dashed var(--color-border-primary);
+  border-radius: var(--radius-lg);
+  padding: 2rem 1rem;
+  text-align: center;
+  cursor: pointer;
+  background: var(--color-bg-muted);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  transition: var(--transition-fast);
+}
+
+.code-markdocx-dropzone:hover,
+.code-markdocx-dropzone.is-active {
+  border-color: var(--color-primary);
+  background: var(--color-primary-subtle);
+}
+
+.code-markdocx-hidden-input {
+  display: none;
+}
+
+.code-markdocx-drop-icon {
+  color: var(--color-primary);
+}
+
+.code-markdocx-drop-title,
+.code-markdocx-drop-filename {
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+
+.code-markdocx-options-grid {
+  display: grid;
+  grid-template-columns: 1fr 1.4fr;
+  gap: 1rem;
+}
+
+@media (max-width: 820px) {
+  .code-markdocx-options-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.code-markdocx-checkboxes {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.code-markdocx-check {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+
+.code-markdocx-glossary {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.code-markdocx-label {
+  font-size: 0.82rem;
+  color: var(--color-text-secondary);
+}
+
+.code-markdocx-textarea,
+.code-markdocx-code-textarea,
+.code-markdocx-input,
+.code-markdocx-field select {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--color-bg-input);
+  color: var(--color-text-primary);
+  border: 1px solid var(--color-border-primary);
+  border-radius: var(--radius-sm);
+  padding: 0.5rem 0.65rem;
+  font-size: 0.84rem;
+}
+
+.code-markdocx-code-textarea {
+  font-family: var(--font-family-mono);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.code-markdocx-actions-end {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.code-markdocx-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.5rem 0.9rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  font-size: 0.85rem;
+  font-weight: 500;
+  cursor: pointer;
+  text-decoration: none;
+  transition: var(--transition-fast);
+}
+
+.code-markdocx-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.code-markdocx-btn.is-sm {
+  padding: 0.32rem 0.65rem;
+  font-size: 0.8rem;
+}
+
+.code-markdocx-btn.is-primary {
+  background: var(--color-primary);
+  color: var(--color-text-white);
+}
+
+.code-markdocx-btn.is-primary:hover:not(:disabled) {
+  background: var(--color-primary-hover);
+}
+
+.code-markdocx-btn.is-secondary {
+  background: var(--color-bg-elevated);
+  color: var(--color-text-primary);
+  border-color: var(--color-border-primary);
+}
+
+.code-markdocx-btn.is-warning {
+  background: var(--color-warning);
+  color: var(--color-text-inverse);
+}
+
+.code-markdocx-btn.is-ghost {
+  background: transparent;
+  color: var(--color-text-secondary);
+}
+
+.code-markdocx-btn.is-ghost:hover:not(:disabled) {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+.code-markdocx-job-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.code-markdocx-job-title {
+  margin: 0 0 0.25rem;
+  font-size: 1.15rem;
+}
+
+.code-markdocx-job-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.code-markdocx-preflight {
+  border-radius: var(--radius-lg);
+  padding: 0.9rem 1.1rem;
+  border: 1px solid var(--color-border-primary);
+  background: var(--color-bg-surface);
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.code-markdocx-preflight.is-ok {
+  border-color: var(--color-success-border);
+  background: var(--color-success-subtle);
+}
+
+.code-markdocx-preflight.is-warn {
+  border-color: var(--color-warning-border);
+  background: var(--color-warning-subtle);
+}
+
+.code-markdocx-preflight.is-error {
+  border-color: var(--color-danger-border);
+  background: var(--color-danger-subtle);
+}
+
+.code-markdocx-preflight-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.code-markdocx-preflight-status {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+}
+
+.code-markdocx-preflight-metrics {
+  display: flex;
+  gap: 0.9rem;
+  flex-wrap: wrap;
+  font-size: 0.8rem;
+  color: var(--color-text-secondary);
+  margin-top: 0.2rem;
+}
+
+.code-markdocx-preflight-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.code-markdocx-link-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  background: transparent;
+  border: none;
+  padding: 0;
+  color: var(--color-warning);
+  cursor: pointer;
+  font-size: 0.8rem;
+  text-decoration: underline;
+}
+
+.code-markdocx-secrets-box {
+  background: var(--color-bg-surface);
+  border: 1px solid var(--color-warning-border);
+  border-radius: var(--radius-md);
+  padding: 0.75rem;
+  font-size: 0.82rem;
+}
+
+.code-markdocx-secrets-box ul {
+  margin: 0.4rem 0 0;
+  padding-left: 1.25rem;
+}
+
+.code-markdocx-tabs-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.code-markdocx-tabs {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.code-markdocx-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.45rem 0.9rem;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border-primary);
+  background: var(--color-bg-surface);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font-size: 0.86rem;
+}
+
+.code-markdocx-tab.is-active {
+  background: var(--color-primary-subtle);
+  border-color: var(--color-primary-border);
+  color: var(--color-primary);
+  font-weight: 600;
+}
+
+.code-markdocx-filters {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.code-markdocx-filter-btn {
+  padding: 0.3rem 0.7rem;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--color-border-primary);
+  background: var(--color-bg-surface);
+  color: var(--color-text-secondary);
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.code-markdocx-filter-btn.is-active {
+  background: var(--color-primary);
+  color: var(--color-text-white);
+  border-color: var(--color-primary);
+}
+
+.code-markdocx-review-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.code-markdocx-review-card {
+  background: var(--color-bg-surface);
+  border: 1px solid var(--color-border-primary);
+  border-radius: var(--radius-lg);
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.code-markdocx-review-card.has-warning {
+  border-color: var(--color-warning-border);
+}
+
+.code-markdocx-review-card.is-skipped {
+  opacity: 0.72;
+}
+
+.code-markdocx-review-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  padding-bottom: 0.65rem;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.code-markdocx-review-meta,
+.code-markdocx-review-badges {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.code-markdocx-badge.is-id {
+  font-family: var(--font-family-mono);
+  font-size: 0.75rem;
+  padding: 0.15rem 0.45rem;
+  border-radius: var(--radius-xs);
+  background: var(--color-primary-subtle);
+  color: var(--color-primary);
+  font-weight: 600;
+}
+
+.code-markdocx-section-crumb {
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.code-markdocx-caption-tag {
+  font-size: 0.8rem;
+  color: var(--color-text-secondary);
+}
+
+.code-markdocx-review-grid {
+  display: grid;
+  grid-template-columns: 1fr 1.25fr;
+  gap: 1rem;
+}
+
+@media (max-width: 960px) {
+  .code-markdocx-review-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.code-markdocx-review-left,
+.code-markdocx-review-right {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.code-markdocx-orig-img-wrap {
+  position: relative;
+  border: 1px solid var(--color-border-primary);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-muted);
+  padding: 0.5rem;
+  text-align: center;
+}
+
+.code-markdocx-orig-img {
+  max-width: 100%;
+  max-height: 360px;
+  object-fit: contain;
+  cursor: zoom-in;
+  border-radius: var(--radius-xs);
+}
+
+.code-markdocx-zoom-btn {
+  margin-top: 0.5rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.25rem 0.55rem;
+  font-size: 0.75rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border-primary);
+  background: var(--color-bg-surface);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+
+.code-markdocx-vector-box {
+  display: flex;
+  gap: 0.65rem;
+  padding: 0.9rem;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-warning-border);
+  background: var(--color-warning-subtle);
+  color: var(--color-warning);
+  font-size: 0.84rem;
+}
+
+.code-markdocx-vector-box p {
+  margin: 0.25rem 0 0;
+}
+
+.code-markdocx-context-details {
+  font-size: 0.8rem;
+  color: var(--color-text-secondary);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  padding: 0.5rem 0.75rem;
+}
+
+.code-markdocx-context-block p {
+  margin: 0.2rem 0 0.5rem;
+  white-space: pre-wrap;
+}
+
+.code-markdocx-syntax-err-body {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex: 1;
+  flex-wrap: wrap;
+}
+
+.code-markdocx-syntax-ok {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.78rem;
+  color: var(--color-success);
+  margin-bottom: 0.35rem;
+}
+
+.code-markdocx-editor-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+}
+
+.code-markdocx-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.8rem;
+  color: var(--color-text-secondary);
+}
+
+.code-markdocx-card-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.code-markdocx-retry-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 1;
+  min-width: 240px;
+}
+
+.code-markdocx-skipped-box,
+.code-markdocx-processing-box {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 1rem;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-muted);
+  border: 1px solid var(--color-border-subtle);
+  color: var(--color-text-secondary);
+  font-size: 0.86rem;
+}
+
+.code-markdocx-md-pre {
+  margin: 0;
+  padding: 1rem;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-app);
+  border: 1px solid var(--color-border-primary);
+  overflow: auto;
+  max-height: 68vh;
+  font-family: var(--font-family-mono);
+  font-size: 0.82rem;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.code-markdocx-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 2.5rem 1rem;
+  color: var(--color-text-secondary);
+}
+
+.code-markdocx-table-wrap {
+  overflow-x: auto;
+}
+
+.code-markdocx-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.code-markdocx-table th,
+.code-markdocx-table td {
+  padding: 0.65rem 0.75rem;
+  border-bottom: 1px solid var(--color-border-subtle);
+  text-align: left;
+}
+
+.code-markdocx-table th {
+  color: var(--color-text-secondary);
+  font-weight: 600;
+  background: var(--color-bg-muted);
+}
+
+.code-markdocx-row-actions {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.code-markdocx-link {
+  color: var(--color-primary);
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.code-markdocx-link:hover {
+  text-decoration: underline;
+}
+
+.code-markdocx-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  background: var(--color-bg-overlay);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem;
+}
+
+.code-markdocx-lightbox-img {
+  max-width: 92vw;
+  max-height: 90vh;
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  background: var(--color-bg-surface);
+}
+
+.code-markdocx-lightbox-close {
+  position: fixed;
+  top: 1rem;
+  right: 1rem;
+  background: var(--color-bg-surface);
+  color: var(--color-text-primary);
+  border: 1px solid var(--color-border-primary);
+  border-radius: var(--radius-full);
+  padding: 0.45rem;
+  cursor: pointer;
+}
+
+.is-danger-text {
+  color: var(--color-danger);
+  font-weight: 600;
+}
+
+.is-warn-text {
+  color: var(--color-warning);
+  font-weight: 600;
+}
+
+.code-markdocx-spin {
+  animation: code-markdocx-spin 1s linear infinite;
+}
+
+@keyframes code-markdocx-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}

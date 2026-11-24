@@ -1,0 +1,45 @@
+# ==============================================================================
+# Code-Markdocx 配置文件示例
+# 说明：VLM 参数采用静态配置，修改后请重启 code-markdocx-server 进程生效。
+#       本地或生产部署请复制为 config.yaml 并按需修改。
+# ==============================================================================
+
+server:
+  port: ":8105"                         # HTTP 服务监听端口（集成到 code-bench gateways）
+  gin_log: true                         # 是否打印 Gin HTTP 访问日志
+  read_timeout: 120s                    # HTTP 读取超时
+  read_header_timeout: 10s              # HTTP 请求头读取超时
+  write_timeout: 180s                   # HTTP 写入超时
+  idle_timeout: 180s                    # Keep-Alive 空闲连接超时
+  max_header_bytes: 1048576             # 最大请求头字节数 (1 MB)
+  max_upload_mb: 50                     # 单次上传 .docx 文件大小上限 (MB)
+
+# ── 多模态大模型 VLM 静态配置（OpenAI-Compatible 接口，修改需重启） ──
+vlm:
+  base_url: "https://api.openai.com/v1" # 兼容 OpenAI /chat/completions 的网关基址（如 http://127.0.0.1:8088/v1）
+  api_key: "YOUR_VLM_API_KEY"           # 模型调用密钥
+  model: "gpt-4o"                       # 具备视觉能力的模型名称（如 qwen2.5-vl-72b / gpt-4o / gemini-2.5-pro）
+  timeout_seconds: 90                   # 单张图片 VLM 请求超时（秒）
+  max_concurrency: 3                    # 单任务图片并发识图上限
+  max_retries: 2                        # 瞬态故障 (429/5xx) 自动重试次数
+  temperature: 0.1                      # 采样温度（建议 0.0 ~ 0.2 保持结构稳定）
+  max_tokens: 4096                      # 单张图片最大输出 Token
+  user_agent: ""                        # 可选自定义 User-Agent；留空默认 Code-Markdocx/<version>
+  extra_system_prompt: ""               # 可选追加团队规范提示词（如特定 Mermaid 风格或系统名词约定）
+
+# ── .docx 解析与去噪默认策略 ──
+convert:
+  strip_toc: true                       # 自动剔除 Word 目录域 (TOC)
+  strip_cover: false                    # 是否剔除首页封面（首个一级标题前的内容，按需开启）
+  strip_revision_table: true            # 自动剔除文首版本修订记录表
+  min_image_px: 48                      # 小于 min_image_px x min_image_px 的小图标自动跳过
+  max_image_dim: 2048                   # 送入 VLM 前图片最大边长限制（像素）
+  dedupe_logo_threshold: 3              # 同一图片在文档中出现 >= N 次视为页眉/装饰 Logo 自动跳过
+  soffice_path: ""                      # 可选 LibreOffice soffice 路径（用于转 .emf/.wmf 矢量图；留空自动探测）
+  ref_doc_max_bytes: 524288             # 对齐 code-archdoc 的单篇参考文档上限（默认 512 KB）
+
+# ── 无状态临时任务存储与 TTL 清理 ──
+storage:
+  temp_dir: "./tmp_jobs"                # 临时解压图片与中间目录
+  job_ttl_minutes: 120                  # 转换任务内存与临时目录保留时长（分钟）
+  max_active_jobs: 20                   # 内存中保留的最大任务数
