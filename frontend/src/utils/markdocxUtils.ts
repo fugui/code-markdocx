@@ -281,3 +281,119 @@ export function resolveAssetImageUrl(
   const normalized = trimmed.replace(/^\.\//, '');
   return assetUrlMap[trimmed] ?? assetUrlMap[normalized] ?? trimmed;
 }
+
+export function stripMarkdownTitle(rawUrl: string): string {
+  return rawUrl
+    .trim()
+    .replace(/\s+"[^"]*"$/, '')
+    .replace(/\s+'[^']*'$/, '');
+}
+
+export function isSafeHref(rawHref: string): boolean {
+  const trimmed = rawHref.trim();
+  if (!trimmed) {
+    return false;
+  }
+  if (trimmed.startsWith('#')) {
+    return true;
+  }
+  return /^(https?:\/\/|mailto:)/i.test(trimmed);
+}
+
+export type InlineToken =
+  | { type: 'text'; value: string }
+  | { type: 'code'; value: string }
+  | { type: 'image'; alt: string; url: string }
+  | { type: 'link'; children: InlineToken[]; url: string }
+  | { type: 'autolink'; url: string }
+  | { type: 'bold'; children: InlineToken[] }
+  | { type: 'italic'; children: InlineToken[] }
+  | { type: 'strike'; children: InlineToken[] };
+
+const INLINE_TOKEN_PATTERN =
+  '(`[^`]+`|!\\[[^\\]]*\\]\\([^)]+\\)|\\[[^\\]]+\\]\\([^)]+\\)|<(?:https?:\\/\\/|mailto:)[^\\s<>]+>|\\*\\*(?:[^*\\n]|\\*(?!\\*))+?\\*\\*|~~(?:[^~\\n]|~(?!~))+?~~|\\*[^*\\n]+?\\*)';
+const MAX_INLINE_DEPTH = 8;
+
+export function tokenizeInlineMarkdown(text: string, depth = 0): InlineToken[] {
+  if (!text) {
+    return [];
+  }
+  if (depth >= MAX_INLINE_DEPTH) {
+    return [{ type: 'text', value: text }];
+  }
+
+  // Fresh local RegExp instance per invocation avoids shared /g lastIndex corruption on recursion.
+  const tokenRe = new RegExp(INLINE_TOKEN_PATTERN, 'g');
+  const tokens: InlineToken[] = [];
+  let lastIndex = 0;
+
+  let match: RegExpExecArray | null;
+  while ((match = tokenRe.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      tokens.push({ type: 'text', value: text.slice(lastIndex, match.index) });
+    }
+
+    const token = match[0];
+    const nextLastIndex = tokenRe.lastIndex > match.index ? tokenRe.lastIndex : match.index + 1;
+
+    if (token.startsWith('`') && token.endsWith('`') && token.length >= 2) {
+      tokens.push({ type: 'code', value: token.slice(1, -1) });
+    } else if (token.startsWith('![')) {
+      const m = token.match(/^!\[([^\]]*)\]\(([^)]+)\)$/);
+      if (m) {
+        const alt = m[1].replace(/\\\[/g, '[').replace(/\\\]/g, ']');
+        tokens.push({ type: 'image', alt, url: stripMarkdownTitle(m[2]) });
+      } else {
+        tokens.push({ type: 'text', value: token });
+      }
+    } else if (token.startsWith('[')) {
+      const m = token.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
+      if (m) {
+        const href = stripMarkdownTitle(m[2]);
+        if (isSafeHref(href)) {
+          tokens.push({
+            type: 'link',
+            url: href,
+            children: tokenizeInlineMarkdown(m[1], depth + 1),
+          });
+        } else {
+          tokens.push({ type: 'text', value: token });
+        }
+      } else {
+        tokens.push({ type: 'text', value: token });
+      }
+    } else if (token.startsWith('<') && token.endsWith('>')) {
+      const href = token.slice(1, -1);
+      if (isSafeHref(href)) {
+        tokens.push({ type: 'autolink', url: href });
+      } else {
+        tokens.push({ type: 'text', value: token });
+      }
+    } else if (token.startsWith('**') && token.endsWith('**') && token.length > 4) {
+      tokens.push({
+        type: 'bold',
+        children: tokenizeInlineMarkdown(token.slice(2, -2), depth + 1),
+      });
+    } else if (token.startsWith('~~') && token.endsWith('~~') && token.length > 4) {
+      tokens.push({
+        type: 'strike',
+        children: tokenizeInlineMarkdown(token.slice(2, -2), depth + 1),
+      });
+    } else if (token.startsWith('*') && token.endsWith('*') && token.length > 2) {
+      tokens.push({
+        type: 'italic',
+        children: tokenizeInlineMarkdown(token.slice(1, -1), depth + 1),
+      });
+    } else {
+      tokens.push({ type: 'text', value: token });
+    }
+
+    lastIndex = nextLastIndex;
+    tokenRe.lastIndex = nextLastIndex;
+  }
+
+  if (lastIndex < text.length) {
+    tokens.push({ type: 'text', value: text.slice(lastIndex) });
+  }
+  return tokens;
+}

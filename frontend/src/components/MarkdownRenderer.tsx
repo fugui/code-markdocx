@@ -6,6 +6,9 @@ import {
   resolveAssetImageUrl,
   slugifyHeading,
   stripInlineMarkdownForHeading,
+  stripMarkdownTitle,
+  tokenizeInlineMarkdown,
+  type InlineToken,
 } from '../utils/markdocxUtils';
 
 export interface MarkdownRendererProps {
@@ -21,26 +24,123 @@ const ALERT_META: Record<string, { label: string; tone: string }> = {
   CAUTION: { label: '危险', tone: 'caution' },
 };
 
-function isSafeHref(rawHref: string): boolean {
-  const trimmed = rawHref.trim();
-  if (!trimmed) {
-    return false;
-  }
-  if (trimmed.startsWith('#')) {
-    return true;
-  }
-  return /^(https?:\/\/|mailto:)/i.test(trimmed);
+interface CodeBlockProps {
+  lang: string;
+  code: string;
 }
 
-function stripMarkdownTitle(rawUrl: string): string {
-  return rawUrl
-    .trim()
-    .replace(/\s+"[^"]*"$/, '')
-    .replace(/\s+'[^']*'$/, '');
-}
+const CodeBlock: React.FC<CodeBlockProps> = ({ lang, code }) => {
+  const [copied, setCopied] = useState(false);
 
-const INLINE_TOKEN_RE =
-  /(`[^`]+`|!\[[^\]]*\]\([^)]+\)|\[[^\]]+\]\([^)]+\)|<(?:https?:\/\/|mailto:)[^\s<>]+>|\*\*[^*\n]+?\*\*|~~[^~\n]+?~~|\*[^*\n]+?\*)/g;
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(code);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1600);
+    } catch {
+      // ignore clipboard errors
+    }
+  };
+
+  return (
+    <div className="code-markdocx-prose-codeblock">
+      <div className="code-markdocx-prose-codebar">
+        <span>{lang || 'text'}</span>
+        <button
+          type="button"
+          className="code-markdocx-prose-copybtn"
+          onClick={() => void handleCopy()}
+        >
+          {copied ? <Check size={13} /> : <Copy size={13} />}
+          <span>{copied ? '已复制' : '复制'}</span>
+        </button>
+      </div>
+      <pre className="code-markdocx-prose-pre">
+        <code>{code}</code>
+      </pre>
+    </div>
+  );
+};
+
+function renderTokens(
+  tokens: InlineToken[],
+  assetUrlMap: Record<string, string>,
+  onZoomImage: (src: string, alt: string) => void,
+  keyPrefix: string,
+): React.ReactNode[] {
+  return tokens.map((token, idx) => {
+    const key = `${keyPrefix}-${idx}`;
+    switch (token.type) {
+      case 'text':
+        return <React.Fragment key={key}>{token.value}</React.Fragment>;
+      case 'code':
+        return (
+          <code key={key} className="code-markdocx-inline-code">
+            {token.value}
+          </code>
+        );
+      case 'image': {
+        const resolved = resolveAssetImageUrl(token.url, assetUrlMap);
+        return (
+          <img
+            key={key}
+            src={resolved}
+            alt={token.alt}
+            title={token.alt || '点击放大查看'}
+            className="code-markdocx-prose-inline-img"
+            onClick={() => onZoomImage(resolved, token.alt)}
+          />
+        );
+      }
+      case 'link': {
+        const isExternal = /^https?:\/\//i.test(token.url);
+        return (
+          <a
+            key={key}
+            href={token.url}
+            target={isExternal ? '_blank' : undefined}
+            rel={isExternal ? 'noopener noreferrer' : undefined}
+            className="code-markdocx-prose-link"
+          >
+            {renderTokens(token.children, assetUrlMap, onZoomImage, `${key}-lnk`)}
+          </a>
+        );
+      }
+      case 'autolink': {
+        const isExternal = /^https?:\/\//i.test(token.url);
+        return (
+          <a
+            key={key}
+            href={token.url}
+            target={isExternal ? '_blank' : undefined}
+            rel={isExternal ? 'noopener noreferrer' : undefined}
+            className="code-markdocx-prose-link"
+          >
+            {token.url}
+          </a>
+        );
+      }
+      case 'bold':
+        return (
+          <strong key={key}>
+            {renderTokens(token.children, assetUrlMap, onZoomImage, `${key}-b`)}
+          </strong>
+        );
+      case 'strike':
+        return (
+          <del key={key}>
+            {renderTokens(token.children, assetUrlMap, onZoomImage, `${key}-del`)}
+          </del>
+        );
+      case 'italic':
+        return (
+          <em key={key}>
+            {renderTokens(token.children, assetUrlMap, onZoomImage, `${key}-em`)}
+          </em>
+        );
+    }
+  });
+}
 
 function renderInlineNodes(
   text: string,
@@ -51,109 +151,7 @@ function renderInlineNodes(
   if (!text) {
     return [];
   }
-  const nodes: React.ReactNode[] = [];
-  let lastIndex = 0;
-  let matchIndex = 0;
-  INLINE_TOKEN_RE.lastIndex = 0;
-
-  let match: RegExpExecArray | null;
-  while ((match = INLINE_TOKEN_RE.exec(text)) !== null) {
-    if (match.index > lastIndex) {
-      nodes.push(text.slice(lastIndex, match.index));
-    }
-    const token = match[0];
-    const key = `${keyPrefix}-${matchIndex++}`;
-
-    if (token.startsWith('`') && token.endsWith('`') && token.length >= 2) {
-      nodes.push(
-        <code key={key} className="code-markdocx-inline-code">
-          {token.slice(1, -1)}
-        </code>,
-      );
-    } else if (token.startsWith('![')) {
-      const m = token.match(/^!\[([^\]]*)\]\(([^)]+)\)$/);
-      if (m) {
-        const alt = m[1].replace(/\\\[/g, '[').replace(/\\\]/g, ']');
-        const resolved = resolveAssetImageUrl(stripMarkdownTitle(m[2]), assetUrlMap);
-        nodes.push(
-          <img
-            key={key}
-            src={resolved}
-            alt={alt}
-            title={alt || '点击放大查看'}
-            className="code-markdocx-prose-inline-img"
-            onClick={() => onZoomImage(resolved, alt)}
-          />,
-        );
-      } else {
-        nodes.push(token);
-      }
-    } else if (token.startsWith('[')) {
-      const m = token.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
-      if (m && isSafeHref(stripMarkdownTitle(m[2]))) {
-        const href = stripMarkdownTitle(m[2]);
-        const isExternal = /^https?:\/\//i.test(href);
-        nodes.push(
-          <a
-            key={key}
-            href={href}
-            target={isExternal ? '_blank' : undefined}
-            rel={isExternal ? 'noopener noreferrer' : undefined}
-            className="code-markdocx-prose-link"
-          >
-            {renderInlineNodes(m[1], assetUrlMap, onZoomImage, `${key}-lnk`)}
-          </a>,
-        );
-      } else {
-        nodes.push(token);
-      }
-    } else if (token.startsWith('<') && token.endsWith('>')) {
-      const href = token.slice(1, -1);
-      if (isSafeHref(href)) {
-        const isExternal = /^https?:\/\//i.test(href);
-        nodes.push(
-          <a
-            key={key}
-            href={href}
-            target={isExternal ? '_blank' : undefined}
-            rel={isExternal ? 'noopener noreferrer' : undefined}
-            className="code-markdocx-prose-link"
-          >
-            {href}
-          </a>,
-        );
-      } else {
-        nodes.push(token);
-      }
-    } else if (token.startsWith('**') && token.endsWith('**')) {
-      nodes.push(
-        <strong key={key}>
-          {renderInlineNodes(token.slice(2, -2), assetUrlMap, onZoomImage, `${key}-b`)}
-        </strong>,
-      );
-    } else if (token.startsWith('~~') && token.endsWith('~~')) {
-      nodes.push(
-        <del key={key}>
-          {renderInlineNodes(token.slice(2, -2), assetUrlMap, onZoomImage, `${key}-del`)}
-        </del>,
-      );
-    } else if (token.startsWith('*') && token.endsWith('*')) {
-      nodes.push(
-        <em key={key}>
-          {renderInlineNodes(token.slice(1, -1), assetUrlMap, onZoomImage, `${key}-em`)}
-        </em>,
-      );
-    } else {
-      nodes.push(token);
-    }
-
-    lastIndex = INLINE_TOKEN_RE.lastIndex;
-  }
-
-  if (lastIndex < text.length) {
-    nodes.push(text.slice(lastIndex));
-  }
-  return nodes;
+  return renderTokens(tokenizeInlineMarkdown(text), assetUrlMap, onZoomImage, keyPrefix);
 }
 
 function splitTableRow(rowLine: string): string[] {
@@ -200,20 +198,7 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
   markdown,
   assetUrlMap = {},
 }) => {
-  const [copiedCodeIdx, setCopiedCodeIdx] = useState<number | null>(null);
   const [lightbox, setLightbox] = useState<{ src: string; alt: string } | null>(null);
-
-  const handleCopyCode = async (code: string, idx: number) => {
-    try {
-      await navigator.clipboard.writeText(code);
-      setCopiedCodeIdx(idx);
-      window.setTimeout(() => {
-        setCopiedCodeIdx((cur) => (cur === idx ? null : cur));
-      }, 1600);
-    } catch {
-      // ignore clipboard errors
-    }
-  };
 
   const renderedBlocks = useMemo(() => {
     if (!markdown.trim()) {
@@ -265,22 +250,7 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
         }
 
         elements.push(
-          <div key={`code-${i}-${blockIdx}`} className="code-markdocx-prose-codeblock">
-            <div className="code-markdocx-prose-codebar">
-              <span>{lang || 'text'}</span>
-              <button
-                type="button"
-                className="code-markdocx-prose-copybtn"
-                onClick={() => void handleCopyCode(codeText, blockIdx)}
-              >
-                {copiedCodeIdx === blockIdx ? <Check size={13} /> : <Copy size={13} />}
-                <span>{copiedCodeIdx === blockIdx ? '已复制' : '复制'}</span>
-              </button>
-            </div>
-            <pre className="code-markdocx-prose-pre">
-              <code>{codeText}</code>
-            </pre>
-          </div>,
+          <CodeBlock key={`code-${i}-${blockIdx}`} lang={lang} code={codeText} />,
         );
         continue;
       }
@@ -513,7 +483,7 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
     }
 
     return elements;
-  }, [markdown, assetUrlMap, copiedCodeIdx]);
+  }, [markdown, assetUrlMap]);
 
   return (
     <div className="code-markdocx-prose">

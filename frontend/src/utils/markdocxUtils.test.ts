@@ -10,6 +10,7 @@ import {
   getPreflightStatusLevel,
   isUnconvertedWithImage,
   resolveAssetImageUrl,
+  tokenizeInlineMarkdown,
 } from './markdocxUtils.ts';
 
 function makeImage(overrides: Partial<ImageState> = {}): ImageState {
@@ -191,4 +192,59 @@ test('resolveAssetImageUrl resolves relative assets paths', () => {
   assert.equal(resolveAssetImageUrl('assets/img-001.png', map), '/api/jobs/123/images/img-001');
   assert.equal(resolveAssetImageUrl('./assets/img-001.png', map), '/api/jobs/123/images/img-001');
   assert.equal(resolveAssetImageUrl('https://example.com/a.png', map), 'https://example.com/a.png');
+});
+
+test('tokenizeInlineMarkdown handles bold, nested formatting, and terminates safely', () => {
+  // Directly reproduces the caption pattern (**...**) that triggered the shared RegExp lastIndex loop
+  assert.deepEqual(tokenizeInlineMarkdown('**图 1-1 登录时序**'), [
+    { type: 'bold', children: [{ type: 'text', value: '图 1-1 登录时序' }] },
+  ]);
+
+  assert.deepEqual(
+    tokenizeInlineMarkdown('**A** 与 *B* 和 ~~C~~ 以及 `code` <https://example.com>'),
+    [
+      { type: 'bold', children: [{ type: 'text', value: 'A' }] },
+      { type: 'text', value: ' 与 ' },
+      { type: 'italic', children: [{ type: 'text', value: 'B' }] },
+      { type: 'text', value: ' 和 ' },
+      { type: 'strike', children: [{ type: 'text', value: 'C' }] },
+      { type: 'text', value: ' 以及 ' },
+      { type: 'code', value: 'code' },
+      { type: 'text', value: ' ' },
+      { type: 'autolink', url: 'https://example.com' },
+    ],
+  );
+
+  assert.deepEqual(
+    tokenizeInlineMarkdown('[**加粗**与*斜体*](https://example.com) ![图注](assets/img-001.png)'),
+    [
+      {
+        type: 'link',
+        url: 'https://example.com',
+        children: [
+          { type: 'bold', children: [{ type: 'text', value: '加粗' }] },
+          { type: 'text', value: '与' },
+          { type: 'italic', children: [{ type: 'text', value: '斜体' }] },
+        ],
+      },
+      { type: 'text', value: ' ' },
+      { type: 'image', alt: '图注', url: 'assets/img-001.png' },
+    ],
+  );
+
+  assert.deepEqual(tokenizeInlineMarkdown('**外层 *内层* 文本**'), [
+    {
+      type: 'bold',
+      children: [
+        { type: 'text', value: '外层 ' },
+        { type: 'italic', children: [{ type: 'text', value: '内层' }] },
+        { type: 'text', value: ' 文本' },
+      ],
+    },
+  ]);
+
+  // Pathological deeply nested/unbalanced markers must terminate fast within MAX_INLINE_DEPTH
+  const pathological = `${'**'.repeat(20)}text${'**'.repeat(20)}`;
+  const tokens = tokenizeInlineMarkdown(pathological);
+  assert.ok(tokens.length > 0);
 });
