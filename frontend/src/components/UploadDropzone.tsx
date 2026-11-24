@@ -21,6 +21,7 @@ export const UploadDropzone: React.FC<UploadDropzoneProps> = ({
   const [stripRevisionTable, setStripRevisionTable] = useState(true);
   const [stripCover, setStripCover] = useState(false);
   const [skipVLM, setSkipVLM] = useState(false);
+  const [keepUnconvertedOriginals, setKeepUnconvertedOriginals] = useState(false);
   const [glossary, setGlossary] = useState('');
   const [fileError, setFileError] = useState('');
 
@@ -56,6 +57,7 @@ export const UploadDropzone: React.FC<UploadDropzoneProps> = ({
       strip_cover: stripCover,
       strip_revision_table: stripRevisionTable,
       skip_vlm: skipVLM,
+      keep_unconverted_originals: keepUnconvertedOriginals,
     });
   };
 
@@ -166,6 +168,14 @@ export const UploadDropzone: React.FC<UploadDropzoneProps> = ({
               onChange={(e) => setSkipVLM(e.target.checked)}
             />
             <span>仅提取正文结构（跳过 VLM 识图）</span>
+          </label>
+          <label className="code-markdocx-check">
+            <input
+              type="checkbox"
+              checked={keepUnconvertedOriginals}
+              onChange={(e) => setKeepUnconvertedOriginals(e.target.checked)}
+            />
+            <span>未转 Mermaid 的图片自动引用原图（支持 ZIP 打包下载）</span>
           </label>
         </div>
 

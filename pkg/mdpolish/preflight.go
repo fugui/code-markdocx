@@ -22,6 +22,7 @@ type ImageStats struct {
 	Skipped           int `json:"skipped"`
 	LowConfidence     int `json:"low_confidence"`
 	UnsupportedVector int `json:"unsupported_vector"`
+	KeptOriginal      int `json:"kept_original"`
 }
 
 type SplitSuggestion struct {
@@ -142,7 +143,9 @@ func Analyze(markdown string, states []*ImageState, maxBytes int64) PreflightRep
 		switch st.Status {
 		case StatusDone:
 			rep.ImageStats.Done++
-			if st.Confidence == vlm.ConfidenceLow {
+			if st.KeepOriginal && st.AssetFilename != "" {
+				rep.ImageStats.KeptOriginal++
+			} else if st.Confidence == vlm.ConfidenceLow {
 				rep.ImageStats.LowConfidence++
 			}
 		case StatusFailed:

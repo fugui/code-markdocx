@@ -31,6 +31,9 @@ type ImageState struct {
 	Status            ImageStatus         `json:"status"`
 	Skipped           bool                `json:"skipped"`
 	SkipReason        string              `json:"skip_reason,omitempty"`
+	KeepOriginal      bool                `json:"keep_original"`
+	AssetFilename     string              `json:"asset_filename,omitempty"`
+	HasImageFile      bool                `json:"has_image_file"`
 	UnsupportedVector bool                `json:"unsupported_vector"`
 	VectorWarning     string              `json:"vector_warning,omitempty"`
 	Error             string              `json:"error,omitempty"`
@@ -155,9 +158,49 @@ func renderGFMTable(rows [][]string) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
+func escapeMarkdownAlt(s string) string {
+	r := strings.NewReplacer("[", "\\[", "]", "\\]", "\r", " ", "\n", " ")
+	return strings.TrimSpace(r.Replace(s))
+}
+
+// IsUnconvertedToStructured reports whether an image has a raster asset on disk
+// and has not yet been turned into structured Mermaid, a table, or an original-image link.
+func IsUnconvertedToStructured(st *ImageState) bool {
+	if st == nil || !st.HasImageFile || st.AssetFilename == "" || st.UnsupportedVector || st.KeepOriginal {
+		return false
+	}
+	if st.Status == StatusPending || st.Status == StatusProcessing {
+		return false
+	}
+	if st.Status == StatusFailed || st.Skipped || st.Status == StatusSkipped {
+		return true
+	}
+	hasTable := st.Category == vlm.CategoryTableShot && strings.TrimSpace(st.MarkdownTable) != ""
+	return strings.TrimSpace(st.MermaidCode) == "" && !hasTable
+}
+
 func renderImageBlock(st *ImageState) string {
 	if st == nil || st.Skipped || st.Status == StatusSkipped {
 		return ""
+	}
+	if st.KeepOriginal && st.AssetFilename != "" {
+		var parts []string
+		caption := strings.TrimSpace(st.Caption)
+		if caption != "" {
+			parts = append(parts, "**"+caption+"**")
+		}
+		alt := caption
+		if alt == "" {
+			alt = strings.TrimSpace(st.OrigFilename)
+		}
+		if alt == "" {
+			alt = st.ImageID
+		}
+		parts = append(parts, fmt.Sprintf("![%s](assets/%s)", escapeMarkdownAlt(alt), st.AssetFilename))
+		if sum := strings.TrimSpace(st.Summary); sum != "" {
+			parts = append(parts, "> 图表说明："+sum)
+		}
+		return strings.Join(parts, "\n\n")
 	}
 	if st.UnsupportedVector || st.Status == StatusUnsupportedVector {
 		label := st.Caption

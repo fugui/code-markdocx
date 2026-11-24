@@ -2,58 +2,41 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { ImageState, PreflightReport } from '../types/api.ts';
 import {
+  collectPreflightIssues,
   countSyntaxErrors,
+  extractHeadings,
   filterImages,
   formatBytes,
   getPreflightStatusLevel,
+  isUnconvertedWithImage,
+  resolveAssetImageUrl,
 } from './markdocxUtils.ts';
 
-test('formatBytes formats bytes and KB cleanly', () => {
-  assert.equal(formatBytes(512), '512 B');
-  assert.equal(formatBytes(2048), '2.0 KB');
-  assert.equal(formatBytes(524288), '512.0 KB');
-});
+function makeImage(overrides: Partial<ImageState> = {}): ImageState {
+  return {
+    image_id: 'img-001',
+    orig_filename: 'a.png',
+    section_path: '1. 架构',
+    caption: '图1',
+    context_before: '',
+    context_after: '',
+    width: 400,
+    height: 300,
+    status: 'done',
+    skipped: false,
+    keep_original: false,
+    has_image_file: true,
+    asset_filename: 'img-001.png',
+    unsupported_vector: false,
+    category: 'uml_diagram',
+    mermaid_code: 'flowchart TD\n A-->B',
+    confidence: 'high',
+    ...overrides,
+  };
+}
 
-test('filterImages filters attention including syntax errors', () => {
-  const images: ImageState[] = [
-    {
-      image_id: 'img-001',
-      orig_filename: 'a.png',
-      section_path: '1. 架构',
-      caption: '图1',
-      context_before: '',
-      context_after: '',
-      width: 400,
-      height: 300,
-      status: 'done',
-      skipped: false,
-      unsupported_vector: false,
-      category: 'uml_diagram',
-      mermaid_code: 'flowchart TD\n A-->B',
-      confidence: 'high',
-    },
-    {
-      image_id: 'img-002',
-      orig_filename: 'b.png',
-      section_path: '2. 跳过',
-      caption: '',
-      context_before: '',
-      context_after: '',
-      width: 40,
-      height: 40,
-      status: 'skipped',
-      skipped: true,
-      unsupported_vector: false,
-    },
-  ];
-  const errs = { 'img-001': 'Parse error on line 2' };
-  assert.equal(filterImages(images, 'attention', errs).length, 1);
-  assert.equal(filterImages(images, 'skipped', errs).length, 1);
-  assert.equal(countSyntaxErrors(images, errs), 1);
-});
-
-test('getPreflightStatusLevel reflects errors and warnings', () => {
-  const base: PreflightReport = {
+function makePreflight(overrides: Partial<PreflightReport> = {}): PreflightReport {
+  return {
     byte_size: 1024,
     max_bytes: 524288,
     exceeds_size_limit: false,
@@ -70,10 +53,142 @@ test('getPreflightStatusLevel reflects errors and warnings', () => {
       skipped: 0,
       low_confidence: 0,
       unsupported_vector: 0,
+      kept_original: 0,
     },
     secret_warnings: [],
+    ...overrides,
   };
+}
+
+test('formatBytes formats bytes and KB cleanly', () => {
+  assert.equal(formatBytes(512), '512 B');
+  assert.equal(formatBytes(2048), '2.0 KB');
+  assert.equal(formatBytes(524288), '512.0 KB');
+});
+
+test('filterImages filters attention, mermaid, original, and skipped', () => {
+  const images: ImageState[] = [
+    makeImage({ image_id: 'img-001' }),
+    makeImage({
+      image_id: 'img-002',
+      orig_filename: 'b.png',
+      section_path: '2. 跳过',
+      caption: '',
+      width: 40,
+      height: 40,
+      status: 'skipped',
+      skipped: true,
+      has_image_file: false,
+      asset_filename: undefined,
+      mermaid_code: undefined,
+    }),
+    makeImage({
+      image_id: 'img-003',
+      orig_filename: 'c.png',
+      keep_original: true,
+      mermaid_code: 'bad mermaid',
+    }),
+  ];
+  const errs = {
+    'img-001': 'Parse error on line 2',
+    'img-003': 'Should be ignored when keep_original is true',
+  };
+  assert.equal(filterImages(images, 'attention', errs).length, 1);
+  assert.equal(filterImages(images, 'mermaid', errs).length, 1);
+  assert.equal(filterImages(images, 'original', errs).length, 1);
+  assert.equal(filterImages(images, 'skipped', errs).length, 1);
+  assert.equal(countSyntaxErrors(images, errs), 1);
+});
+
+test('getPreflightStatusLevel reflects errors and warnings', () => {
+  const base = makePreflight();
   assert.equal(getPreflightStatusLevel(base, 0), 'ok');
   assert.equal(getPreflightStatusLevel({ ...base, exceeds_size_limit: true }, 0), 'warn');
   assert.equal(getPreflightStatusLevel(base, 1), 'error');
+});
+
+test('collectPreflightIssues surfaces failed images, syntax errors, base64, and warnings', () => {
+  const images: ImageState[] = [
+    makeImage({
+      image_id: 'img-001',
+      status: 'failed',
+      error: 'VLM timeout',
+      mermaid_code: '',
+    }),
+    makeImage({
+      image_id: 'img-002',
+      status: 'done',
+      mermaid_code: 'sequenceDiagram\n  bad',
+    }),
+    makeImage({
+      image_id: 'img-003',
+      status: 'unsupported_vector',
+      unsupported_vector: true,
+      vector_warning: 'missing soffice',
+      has_image_file: false,
+      asset_filename: undefined,
+      mermaid_code: '',
+    }),
+    makeImage({
+      image_id: 'img-004',
+      status: 'done',
+      confidence: 'low',
+    }),
+  ];
+  const preflight = makePreflight({
+    has_inline_base64: true,
+    exceeds_size_limit: true,
+  });
+  const issues = collectPreflightIssues(images, preflight, {
+    'img-002': 'Syntax error at line 2',
+  });
+  const errors = issues.filter((i) => i.severity === 'error');
+  const warns = issues.filter((i) => i.severity === 'warn');
+
+  assert.equal(errors.length, 3);
+  assert.equal(errors[0].imageId, 'img-001');
+  assert.match(errors[0].detail, /VLM timeout/);
+  assert.equal(errors[1].imageId, 'img-002');
+  assert.equal(errors[2].kind, 'base64');
+
+  assert.equal(warns.length, 3);
+  assert.equal(isUnconvertedWithImage(images[0]), true);
+  assert.equal(isUnconvertedWithImage(images[2]), false);
+});
+
+test('extractHeadings ignores fenced code blocks and deduplicates IDs', () => {
+  const md = [
+    '# 系统设计',
+    '```markdown',
+    '# 代码块里的标题',
+    '```',
+    '## 接口规范',
+    '~~~txt',
+    '## 假标题',
+    '~~~',
+    '## 接口规范',
+    '### **加粗**子标题',
+  ].join('\n');
+
+  const headings = extractHeadings(md);
+  assert.equal(headings.length, 4);
+  assert.deepEqual(
+    headings.map((h) => ({ id: h.id, text: h.text, level: h.level })),
+    [
+      { id: '系统设计', text: '系统设计', level: 1 },
+      { id: '接口规范', text: '接口规范', level: 2 },
+      { id: '接口规范-2', text: '接口规范', level: 2 },
+      { id: '加粗子标题', text: '加粗子标题', level: 3 },
+    ],
+  );
+});
+
+test('resolveAssetImageUrl resolves relative assets paths', () => {
+  const map = {
+    'assets/img-001.png': '/api/jobs/123/images/img-001',
+    './assets/img-001.png': '/api/jobs/123/images/img-001',
+  };
+  assert.equal(resolveAssetImageUrl('assets/img-001.png', map), '/api/jobs/123/images/img-001');
+  assert.equal(resolveAssetImageUrl('./assets/img-001.png', map), '/api/jobs/123/images/img-001');
+  assert.equal(resolveAssetImageUrl('https://example.com/a.png', map), 'https://example.com/a.png');
 });

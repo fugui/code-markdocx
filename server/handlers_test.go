@@ -7,6 +7,7 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -176,4 +177,155 @@ func TestEndToEndJobFlow(t *testing.T) {
 	if delRec.Code != http.StatusOK {
 		t.Fatalf("delete failed: %d", delRec.Code)
 	}
+}
+
+func TestKeepOriginalAndBundleExport(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	cfg := config.DefaultConfig()
+	cfg.Storage.TempDir = t.TempDir()
+	// Leave VLM unconfigured so img-001 initially fails
+
+	store, err := server.NewJobStore(cfg.Storage.TempDir, 60, 10, 524288)
+	if err != nil {
+		t.Fatalf("NewJobStore: %v", err)
+	}
+	defer store.Close()
+
+	r := gin.New()
+	server.RegisterRoutes(r, server.NewHandlers(cfg, store, nil))
+
+	upload := func(extraFields map[string]string) server.JobDetail {
+		var body bytes.Buffer
+		mw := multipart.NewWriter(&body)
+		fw, _ := mw.CreateFormFile("file", "arch.docx")
+		_, _ = fw.Write(buildIntegrationDocx(t))
+		for k, v := range extraFields {
+			_ = mw.WriteField(k, v)
+		}
+		_ = mw.Close()
+
+		req := httptest.NewRequest(http.MethodPost, "/api/jobs", &body)
+		req.Header.Set("Content-Type", mw.FormDataContentType())
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("upload failed: %d %s", rec.Code, rec.Body.String())
+		}
+		var detail server.JobDetail
+		if err := json.Unmarshal(rec.Body.Bytes(), &detail); err != nil {
+			t.Fatalf("decode detail: %v", err)
+		}
+		return detail
+	}
+
+	// 1. Upload without VLM -> img-001 fails, then batch keep-originals converts it
+	job1 := upload(nil)
+	if job1.Preflight.ImageStats.Failed != 1 {
+		t.Fatalf("expected 1 failed image without VLM, got %+v", job1.Preflight.ImageStats)
+	}
+
+	batchReq := httptest.NewRequest(http.MethodPost, "/api/jobs/"+job1.ID+"/images/keep-originals", strings.NewReader(`{"keep_original":true}`))
+	batchReq.Header.Set("Content-Type", "application/json")
+	batchRec := httptest.NewRecorder()
+	r.ServeHTTP(batchRec, batchReq)
+	if batchRec.Code != http.StatusOK {
+		t.Fatalf("batch keep-originals failed: %d %s", batchRec.Code, batchRec.Body.String())
+	}
+	var batchResp struct {
+		Markdown  string `json:"markdown"`
+		Updated   int    `json:"updated_count"`
+		Preflight struct {
+			ImageStats struct {
+				Failed       int `json:"failed"`
+				KeptOriginal int `json:"kept_original"`
+			} `json:"image_stats"`
+		} `json:"preflight"`
+	}
+	if err := json.Unmarshal(batchRec.Body.Bytes(), &batchResp); err != nil {
+		t.Fatalf("decode batch resp: %v", err)
+	}
+	if batchResp.Updated != 1 || batchResp.Preflight.ImageStats.Failed != 0 || batchResp.Preflight.ImageStats.KeptOriginal != 1 {
+		t.Fatalf("unexpected batch resp: %+v", batchResp)
+	}
+	if !strings.Contains(batchResp.Markdown, "(assets/img-001.png)") {
+		t.Fatalf("expected asset link in markdown:\n%s", batchResp.Markdown)
+	}
+
+	// 2. Patch toggle off and back on
+	patchOff := httptest.NewRequest(http.MethodPatch, "/api/jobs/"+job1.ID+"/images/img-001", strings.NewReader(`{"keep_original":false}`))
+	patchOff.Header.Set("Content-Type", "application/json")
+	patchOffRec := httptest.NewRecorder()
+	r.ServeHTTP(patchOffRec, patchOff)
+	if patchOffRec.Code != http.StatusOK {
+		t.Fatalf("patch off failed: %d", patchOffRec.Code)
+	}
+	patchOn := httptest.NewRequest(http.MethodPatch, "/api/jobs/"+job1.ID+"/images/img-001", strings.NewReader(`{"keep_original":true}`))
+	patchOn.Header.Set("Content-Type", "application/json")
+	patchOnRec := httptest.NewRecorder()
+	r.ServeHTTP(patchOnRec, patchOn)
+	if patchOnRec.Code != http.StatusOK {
+		t.Fatalf("patch on failed: %d", patchOnRec.Code)
+	}
+
+	// 3. Export bundle ZIP (single md + assets/img-001.png)
+	checkZip := func(url string, expectedMD bool) {
+		zReq := httptest.NewRequest(http.MethodGet, url, nil)
+		zRec := httptest.NewRecorder()
+		r.ServeHTTP(zRec, zReq)
+		if zRec.Code != http.StatusOK || zRec.Header().Get("Content-Type") != "application/zip" {
+			t.Fatalf("bundle export %s failed: %d %s", url, zRec.Code, zRec.Header().Get("Content-Type"))
+		}
+		zr, err := zip.NewReader(bytes.NewReader(zRec.Body.Bytes()), int64(zRec.Body.Len()))
+		if err != nil {
+			t.Fatalf("open zip %s: %v", url, err)
+		}
+		entries := map[string][]byte{}
+		for _, f := range zr.File {
+			rc, _ := f.Open()
+			b, _ := io.ReadAll(rc)
+			_ = rc.Close()
+			entries[f.Name] = b
+		}
+		if len(entries["assets/img-001.png"]) == 0 {
+			t.Fatalf("expected non-empty assets/img-001.png in %s, entries=%v", url, keysOf(entries))
+		}
+		if expectedMD {
+			if !strings.Contains(string(entries["arch.md"]), "(assets/img-001.png)") {
+				t.Fatalf("expected arch.md with asset ref in %s", url)
+			}
+		} else {
+			hasMD := false
+			for name, body := range entries {
+				if strings.HasSuffix(name, ".md") && strings.Contains(string(body), "(assets/img-001.png)") {
+					hasMD = true
+				}
+			}
+			if !hasMD {
+				t.Fatalf("expected split .md with asset ref in %s, entries=%v", url, keysOf(entries))
+			}
+		}
+	}
+	checkZip("/api/jobs/"+job1.ID+"/export?bundle=true", true)
+	checkZip("/api/jobs/"+job1.ID+"/export?bundle=true&split=true", false)
+
+	// 4. Upload with skip_vlm=true & keep_unconverted_originals=true
+	job2 := upload(map[string]string{
+		"skip_vlm":                   "true",
+		"keep_unconverted_originals": "true",
+	})
+	if job2.Preflight.ImageStats.Failed != 0 || job2.Preflight.ImageStats.KeptOriginal != 1 {
+		t.Fatalf("expected kept_original=1 and failed=0, got %+v", job2.Preflight.ImageStats)
+	}
+	if !strings.Contains(job2.Markdown, "(assets/img-001.png)") {
+		t.Fatalf("expected auto kept original link in markdown:\n%s", job2.Markdown)
+	}
+}
+
+func keysOf(m map[string][]byte) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
 }

@@ -79,6 +79,10 @@ func RunConvert(args []string) int {
 	for _, p := range prepped {
 		a := p.Asset
 		prepByID[a.ID] = p
+		assetFilename := ""
+		if p.PreparedPath != "" {
+			assetFilename = filepath.Base(p.PreparedPath)
+		}
 		st := &mdpolish.ImageState{
 			ImageID:           a.ID,
 			OrigFilename:      a.OrigFilename,
@@ -91,6 +95,8 @@ func RunConvert(args []string) int {
 			Status:            mdpolish.StatusPending,
 			Skipped:           a.PreSkipped,
 			SkipReason:        a.SkipReason,
+			AssetFilename:     assetFilename,
+			HasImageFile:      len(p.PreparedData) > 0,
 			UnsupportedVector: a.UnsupportedVector,
 			VectorWarning:     a.VectorWarning,
 		}

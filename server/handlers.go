@@ -47,6 +47,7 @@ func RegisterRoutes(r *gin.Engine, h *Handlers) {
 		api.GET("/jobs/:id", h.GetJob)
 		api.DELETE("/jobs/:id", h.DeleteJob)
 		api.GET("/jobs/:id/images/:img_id", h.GetImage)
+		api.POST("/jobs/:id/images/keep-originals", h.KeepOriginalsBatch)
 		api.PATCH("/jobs/:id/images/:img_id", h.PatchImage)
 		api.POST("/jobs/:id/images/:img_id/retry", h.RetryImage)
 		api.GET("/jobs/:id/export", h.ExportJob)
@@ -108,10 +109,11 @@ func (h *Handlers) CreateJob(c *gin.Context) {
 	}
 
 	opts := JobOptions{
-		StripTOC:           parseBoolForm(c.PostForm("strip_toc"), h.cfg.Convert.StripTOC),
-		StripCover:         parseBoolForm(c.PostForm("strip_cover"), h.cfg.Convert.StripCover),
-		StripRevisionTable: parseBoolForm(c.PostForm("strip_revision_table"), h.cfg.Convert.StripRevisionTable),
-		SkipVLM:            parseBoolForm(c.PostForm("skip_vlm"), false),
+		StripTOC:                 parseBoolForm(c.PostForm("strip_toc"), h.cfg.Convert.StripTOC),
+		StripCover:               parseBoolForm(c.PostForm("strip_cover"), h.cfg.Convert.StripCover),
+		StripRevisionTable:       parseBoolForm(c.PostForm("strip_revision_table"), h.cfg.Convert.StripRevisionTable),
+		SkipVLM:                  parseBoolForm(c.PostForm("skip_vlm"), false),
+		KeepUnconvertedOriginals: parseBoolForm(c.PostForm("keep_unconverted_originals"), false),
 	}
 	glossary := strings.TrimSpace(c.PostForm("glossary"))
 
@@ -156,8 +158,12 @@ func (h *Handlers) CreateJob(c *gin.Context) {
 	for _, p := range prepped {
 		a := p.Asset
 		imageOrder = append(imageOrder, a.ID)
+		assetFilename := ""
+		hasImageFile := false
 		if p.PreparedPath != "" {
 			imageFiles[a.ID] = ImageFileMeta{Path: p.PreparedPath, ContentType: p.PreparedCT}
+			assetFilename = filepath.Base(p.PreparedPath)
+			hasImageFile = true
 		}
 		st := &mdpolish.ImageState{
 			ImageID:           a.ID,
@@ -171,6 +177,8 @@ func (h *Handlers) CreateJob(c *gin.Context) {
 			Status:            mdpolish.StatusPending,
 			Skipped:           a.PreSkipped,
 			SkipReason:        a.SkipReason,
+			AssetFilename:     assetFilename,
+			HasImageFile:      hasImageFile,
 			UnsupportedVector: a.UnsupportedVector,
 			VectorWarning:     a.VectorWarning,
 		}
@@ -180,12 +188,26 @@ func (h *Handlers) CreateJob(c *gin.Context) {
 		case a.UnsupportedVector:
 			st.Status = mdpolish.StatusUnsupportedVector
 		case opts.SkipVLM:
-			st.Status = mdpolish.StatusSkipped
-			st.Skipped = true
-			st.SkipReason = "已选择跳过 VLM 识图"
+			if opts.KeepUnconvertedOriginals && hasImageFile {
+				st.KeepOriginal = true
+				st.Skipped = false
+				st.SkipReason = ""
+				st.Status = mdpolish.StatusDone
+			} else {
+				st.Status = mdpolish.StatusSkipped
+				st.Skipped = true
+				st.SkipReason = "已选择跳过 VLM 识图"
+			}
 		case !vlmConfigured:
-			st.Status = mdpolish.StatusFailed
-			st.Error = "服务端 config.yaml 未配置有效 VLM (base_url / api_key / model)"
+			if opts.KeepUnconvertedOriginals && hasImageFile {
+				st.KeepOriginal = true
+				st.Skipped = false
+				st.Error = ""
+				st.Status = mdpolish.StatusDone
+			} else {
+				st.Status = mdpolish.StatusFailed
+				st.Error = "服务端 config.yaml 未配置有效 VLM (base_url / api_key / model)"
+			}
 		default:
 			st.Status = mdpolish.StatusProcessing
 			vlmInputs = append(vlmInputs, vlm.ConvertImageInput{
@@ -255,9 +277,16 @@ func (h *Handlers) runBatchVLM(ctx context.Context, jobID string, inputs []vlm.C
 			if prog.Err != nil {
 				st.Status = mdpolish.StatusFailed
 				st.Error = prog.Err.Error()
-				return
+			} else {
+				applyVLMResult(st, prog.Result)
 			}
-			applyVLMResult(st, prog.Result)
+			if job.Options.KeepUnconvertedOriginals && mdpolish.IsUnconvertedToStructured(st) {
+				st.KeepOriginal = true
+				st.Skipped = false
+				st.SkipReason = ""
+				st.Error = ""
+				st.Status = mdpolish.StatusDone
+			}
 		})
 	})
 
@@ -331,6 +360,7 @@ type patchImageReq struct {
 	MarkdownTable *string              `json:"markdown_table"`
 	Summary       *string              `json:"summary"`
 	Skipped       *bool                `json:"skipped"`
+	KeepOriginal  *bool                `json:"keep_original"`
 }
 
 func (h *Handlers) PatchImage(c *gin.Context) {
@@ -340,7 +370,21 @@ func (h *Handlers) PatchImage(c *gin.Context) {
 		return
 	}
 
-	st, md, preflight, err := h.store.UpdateImage(c.Param("id"), c.Param("img_id"), func(st *mdpolish.ImageState) {
+	jobID := c.Param("id")
+	imgID := c.Param("img_id")
+	if req.KeepOriginal != nil && *req.KeepOriginal {
+		meta, prevState, _, snapErr := h.store.SnapshotImageForRetry(jobID, imgID)
+		if snapErr != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "任务或图片不存在"})
+			return
+		}
+		if !prevState.HasImageFile || prevState.AssetFilename == "" || meta.Path == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "该图片无可用原图文件，无法引用原图"})
+			return
+		}
+	}
+
+	st, md, preflight, err := h.store.UpdateImage(jobID, imgID, func(st *mdpolish.ImageState) {
 		if req.Category != nil {
 			st.Category = *req.Category
 		}
@@ -356,9 +400,19 @@ func (h *Handlers) PatchImage(c *gin.Context) {
 		if req.Summary != nil {
 			st.Summary = *req.Summary
 		}
+		if req.KeepOriginal != nil {
+			st.KeepOriginal = *req.KeepOriginal
+			if *req.KeepOriginal {
+				st.Skipped = false
+				st.SkipReason = ""
+				st.Error = ""
+				st.Status = mdpolish.StatusDone
+			}
+		}
 		if req.Skipped != nil {
 			st.Skipped = *req.Skipped
 			if *req.Skipped {
+				st.KeepOriginal = false
 				st.Status = mdpolish.StatusSkipped
 				if st.SkipReason == "" {
 					st.SkipReason = "人工跳过"
@@ -380,6 +434,79 @@ func (h *Handlers) PatchImage(c *gin.Context) {
 		"image":     st,
 		"markdown":  md,
 		"preflight": preflight,
+	})
+}
+
+type keepOriginalsBatchReq struct {
+	ImageIDs     []string `json:"image_ids"`
+	KeepOriginal *bool    `json:"keep_original"`
+}
+
+func (h *Handlers) KeepOriginalsBatch(c *gin.Context) {
+	var req keepOriginalsBatchReq
+	if c.Request.ContentLength > 0 {
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数无效: " + err.Error()})
+			return
+		}
+	}
+	enable := true
+	if req.KeepOriginal != nil {
+		enable = *req.KeepOriginal
+	}
+
+	targetSet := make(map[string]struct{}, len(req.ImageIDs))
+	for _, id := range req.ImageIDs {
+		if strings.TrimSpace(id) != "" {
+			targetSet[id] = struct{}{}
+		}
+	}
+
+	imgs, md, preflight, updated, err := h.store.UpdateImagesBatch(c.Param("id"), func(job *Job) int {
+		count := 0
+		for _, id := range job.ImageOrder {
+			st := job.Images[id]
+			if st == nil {
+				continue
+			}
+			if len(targetSet) > 0 {
+				if _, ok := targetSet[id]; !ok {
+					continue
+				}
+				if enable && (!st.HasImageFile || st.AssetFilename == "" || st.UnsupportedVector) {
+					continue
+				}
+			} else if enable {
+				if !mdpolish.IsUnconvertedToStructured(st) {
+					continue
+				}
+			} else if !st.KeepOriginal {
+				continue
+			}
+
+			if enable {
+				st.KeepOriginal = true
+				st.Skipped = false
+				st.SkipReason = ""
+				st.Error = ""
+				st.Status = mdpolish.StatusDone
+			} else {
+				st.KeepOriginal = false
+			}
+			count++
+		}
+		return count
+	})
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "任务不存在或已过期"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"images":        imgs,
+		"markdown":      md,
+		"preflight":     preflight,
+		"updated_count": updated,
 	})
 }
 
@@ -456,6 +583,7 @@ func (h *Handlers) RetryImage(c *gin.Context) {
 
 	st, md, preflight, err := h.store.UpdateImage(jobID, imgID, func(st *mdpolish.ImageState) {
 		applyVLMResult(st, res)
+		st.KeepOriginal = false
 		// User explicitly requested retry, so don't auto-skip even if VLM suggested skip.
 		if st.Skipped {
 			st.Skipped = false
@@ -476,6 +604,63 @@ func (h *Handlers) RetryImage(c *gin.Context) {
 }
 
 func (h *Handlers) ExportJob(c *gin.Context) {
+	split := c.Query("split") == "true"
+	bundle := c.Query("bundle") == "true"
+
+	if bundle {
+		filename, md, assets, err := h.store.SnapshotBundleExport(c.Param("id"))
+		if err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "任务不存在或已过期"})
+			return
+		}
+		base := strings.TrimSuffix(filename, filepath.Ext(filename))
+		if base == "" {
+			base = "converted"
+		}
+
+		var buf bytes.Buffer
+		zw := zip.NewWriter(&buf)
+		if split {
+			chunks := mdpolish.SplitByH2(md, filename, h.cfg.Convert.RefDocMaxBytes)
+			for _, ch := range chunks {
+				if err := writeZipFile(zw, ch.Filename, []byte(ch.Content)); err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"error": "写入 ZIP 失败"})
+					return
+				}
+			}
+		} else {
+			if err := writeZipFile(zw, sanitizeHeaderFilename(base)+".md", []byte(md)); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "写入 ZIP 失败"})
+				return
+			}
+		}
+
+		for _, asset := range assets {
+			data, readErr := os.ReadFile(asset.DiskPath)
+			if readErr != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "读取原图附件失败: " + readErr.Error()})
+				return
+			}
+			if err := writeZipFile(zw, asset.ArchivePath, data); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "写入原图附件至 ZIP 失败"})
+				return
+			}
+		}
+
+		if err := zw.Close(); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "关闭 ZIP 失败"})
+			return
+		}
+
+		suffix := "-bundle.zip"
+		if split {
+			suffix = "-split-bundle.zip"
+		}
+		c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s%s"`, sanitizeHeaderFilename(base), suffix))
+		c.Data(http.StatusOK, "application/zip", buf.Bytes())
+		return
+	}
+
 	filename, md, err := h.store.SnapshotExport(c.Param("id"))
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "任务不存在或已过期"})
@@ -486,17 +671,12 @@ func (h *Handlers) ExportJob(c *gin.Context) {
 		base = "converted"
 	}
 
-	if c.Query("split") == "true" {
+	if split {
 		chunks := mdpolish.SplitByH2(md, filename, h.cfg.Convert.RefDocMaxBytes)
 		var buf bytes.Buffer
 		zw := zip.NewWriter(&buf)
 		for _, ch := range chunks {
-			w, wErr := zw.Create(ch.Filename)
-			if wErr != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "生成 ZIP 失败"})
-				return
-			}
-			if _, wErr = w.Write([]byte(ch.Content)); wErr != nil {
+			if err := writeZipFile(zw, ch.Filename, []byte(ch.Content)); err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "写入 ZIP 失败"})
 				return
 			}
@@ -512,6 +692,15 @@ func (h *Handlers) ExportJob(c *gin.Context) {
 
 	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.md"`, sanitizeHeaderFilename(base)))
 	c.Data(http.StatusOK, "text/markdown; charset=utf-8", []byte(md))
+}
+
+func writeZipFile(zw *zip.Writer, name string, data []byte) error {
+	w, err := zw.Create(name)
+	if err != nil {
+		return err
+	}
+	_, err = w.Write(data)
+	return err
 }
 
 func parseBoolForm(raw string, def bool) bool {

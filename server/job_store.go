@@ -29,10 +29,16 @@ const (
 )
 
 type JobOptions struct {
-	StripTOC           bool `json:"strip_toc"`
-	StripCover         bool `json:"strip_cover"`
-	StripRevisionTable bool `json:"strip_revision_table"`
-	SkipVLM            bool `json:"skip_vlm"`
+	StripTOC                 bool `json:"strip_toc"`
+	StripCover               bool `json:"strip_cover"`
+	StripRevisionTable       bool `json:"strip_revision_table"`
+	SkipVLM                  bool `json:"skip_vlm"`
+	KeepUnconvertedOriginals bool `json:"keep_unconverted_originals"`
+}
+
+type BundleAsset struct {
+	ArchivePath string
+	DiskPath    string
 }
 
 type ImageFileMeta struct {
@@ -250,6 +256,26 @@ func (s *JobStore) UpdateImage(jobID, imgID string, fn func(st *mdpolish.ImageSt
 	return &copied, job.Markdown, job.Preflight, nil
 }
 
+func (s *JobStore) UpdateImagesBatch(jobID string, fn func(job *Job) int) ([]*mdpolish.ImageState, string, mdpolish.PreflightReport, int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	job, ok := s.jobs[jobID]
+	if !ok {
+		return nil, "", mdpolish.PreflightReport{}, 0, ErrJobNotFound
+	}
+	updated := fn(job)
+	job.UpdatedAt = time.Now()
+	s.reassembleLocked(job)
+	imgs := make([]*mdpolish.ImageState, 0, len(job.ImageOrder))
+	for _, id := range job.ImageOrder {
+		if st := job.Images[id]; st != nil {
+			cp := *st
+			imgs = append(imgs, &cp)
+		}
+	}
+	return imgs, job.Markdown, job.Preflight, updated, nil
+}
+
 func (s *JobStore) MutateJob(jobID string, fn func(job *Job)) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -286,6 +312,37 @@ func (s *JobStore) SnapshotExport(jobID string) (string, string, error) {
 		return "", "", ErrJobNotFound
 	}
 	return job.Filename, job.Markdown, nil
+}
+
+func (s *JobStore) SnapshotBundleExport(jobID string) (string, string, []BundleAsset, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	job, ok := s.jobs[jobID]
+	if !ok {
+		return "", "", nil, ErrJobNotFound
+	}
+	var assets []BundleAsset
+	seen := make(map[string]struct{})
+	for _, id := range job.ImageOrder {
+		st := job.Images[id]
+		if st == nil || st.Skipped || st.Status == mdpolish.StatusSkipped || !st.KeepOriginal || st.AssetFilename == "" {
+			continue
+		}
+		meta := job.ImageFiles[id]
+		if meta.Path == "" {
+			continue
+		}
+		archivePath := "assets/" + st.AssetFilename
+		if _, exists := seen[archivePath]; exists {
+			continue
+		}
+		seen[archivePath] = struct{}{}
+		assets = append(assets, BundleAsset{
+			ArchivePath: archivePath,
+			DiskPath:    meta.Path,
+		})
+	}
+	return job.Filename, job.Markdown, assets, nil
 }
 
 func (s *JobStore) reassembleLocked(job *Job) {

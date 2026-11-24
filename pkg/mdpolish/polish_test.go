@@ -81,3 +81,57 @@ func TestSplitByH2RespectsFences(t *testing.T) {
 		t.Fatalf("fenced heading must stay inside first chunk: %q", chunks[0].Content)
 	}
 }
+
+func TestKeepOriginalRenderingAndHelpers(t *testing.T) {
+	doc := &docxparser.DocumentIR{
+		Blocks: []docxparser.Block{
+			{Kind: docxparser.BlockHeading, Level: 1, Text: "系统部署"},
+			{Kind: docxparser.BlockImage, ImageID: "img-001"},
+			{Kind: docxparser.BlockImage, ImageID: "img-002"},
+		},
+	}
+	states := map[string]*ImageState{
+		"img-001": {
+			ImageID:       "img-001",
+			OrigFilename:  "deploy[v2].png",
+			Caption:       "图 2-1 部署[拓扑]",
+			Summary:       "双活部署拓扑原图。",
+			Status:        StatusDone,
+			KeepOriginal:  true,
+			HasImageFile:  true,
+			AssetFilename: "img-001.png",
+			Confidence:    vlm.ConfidenceLow, // Kept original must not be flagged as low_confidence
+		},
+		"img-002": {
+			ImageID:       "img-002",
+			OrigFilename:  "ui.png",
+			Status:        StatusSkipped,
+			Skipped:       true,
+			HasImageFile:  true,
+			AssetFilename: "img-002.png",
+		},
+	}
+
+	if IsUnconvertedToStructured(states["img-001"]) {
+		t.Fatalf("img-001 already keeps original, should not be treated as unconverted")
+	}
+	if !IsUnconvertedToStructured(states["img-002"]) {
+		t.Fatalf("skipped raster img-002 should be eligible for keeping original")
+	}
+
+	md := Assemble(doc, states)
+	if !strings.Contains(md, `![图 2-1 部署\[拓扑\]](assets/img-001.png)`) {
+		t.Fatalf("expected escaped alt and assets path in markdown:\n%s", md)
+	}
+	if !strings.Contains(md, "> 图表说明：双活部署拓扑原图。") {
+		t.Fatalf("expected summary quote in markdown:\n%s", md)
+	}
+
+	rep := Analyze(md, []*ImageState{states["img-001"], states["img-002"]}, 524288)
+	if rep.ImageStats.KeptOriginal != 1 {
+		t.Fatalf("expected kept_original=1, got %d", rep.ImageStats.KeptOriginal)
+	}
+	if rep.ImageStats.LowConfidence != 0 {
+		t.Fatalf("kept_original image should not count as low_confidence, got %d", rep.ImageStats.LowConfidence)
+	}
+}

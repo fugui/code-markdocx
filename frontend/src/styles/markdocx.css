@@ -779,6 +779,473 @@
   font-weight: 600;
 }
 
+.is-info-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  color: var(--color-info);
+  font-weight: 600;
+}
+
+.code-markdocx-link-btn.is-danger {
+  color: var(--color-danger);
+  font-weight: 600;
+}
+
+.code-markdocx-errors-box,
+.code-markdocx-warns-box {
+  background: var(--color-bg-surface);
+  border: 1px solid var(--color-danger-border);
+  border-radius: var(--radius-md);
+  padding: 0.75rem 0.9rem;
+  font-size: 0.82rem;
+}
+
+.code-markdocx-warns-box {
+  border-color: var(--color-warning-border);
+}
+
+.code-markdocx-issue-list {
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.code-markdocx-issue-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.45rem 0.6rem;
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-muted);
+  border: 1px solid var(--color-border-subtle);
+  flex-wrap: wrap;
+}
+
+.code-markdocx-issue-text {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.code-markdocx-issue-title {
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.code-markdocx-issue-detail {
+  color: var(--color-text-secondary);
+  word-break: break-word;
+}
+
+.code-markdocx-filters {
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.code-markdocx-review-card.is-highlighted {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px var(--color-primary-subtle);
+  transition: box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.code-markdocx-original-box {
+  padding: 0.9rem;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-info-border);
+  background: var(--color-info-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.code-markdocx-original-box-head {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--color-info);
+  font-size: 0.88rem;
+}
+
+.code-markdocx-original-syntax {
+  display: block;
+  padding: 0.45rem 0.65rem;
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-surface);
+  border: 1px solid var(--color-border-primary);
+  font-family: var(--font-family-mono);
+  font-size: 0.8rem;
+  word-break: break-all;
+}
+
+.code-markdocx-preview-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.code-markdocx-segmented {
+  display: inline-flex;
+  padding: 0.15rem;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-muted);
+  border: 1px solid var(--color-border-primary);
+  gap: 0.15rem;
+}
+
+.code-markdocx-segmented-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.3rem 0.65rem;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: var(--transition-fast);
+}
+
+.code-markdocx-segmented-btn.is-active {
+  background: var(--color-bg-surface);
+  color: var(--color-primary);
+  font-weight: 600;
+  box-shadow: var(--shadow-sm);
+}
+
+.code-markdocx-preview-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1.25rem;
+  align-items: start;
+}
+
+.code-markdocx-preview-layout.has-toc {
+  grid-template-columns: minmax(0, 1fr) 240px;
+}
+
+@media (max-width: 980px) {
+  .code-markdocx-preview-layout.has-toc {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.code-markdocx-preview-body {
+  background: var(--color-bg-app);
+  border: 1px solid var(--color-border-primary);
+  border-radius: var(--radius-md);
+  padding: 1.5rem 1.75rem;
+  min-width: 0;
+}
+
+.code-markdocx-toc {
+  position: sticky;
+  top: 1rem;
+  background: var(--color-bg-muted);
+  border: 1px solid var(--color-border-primary);
+  border-radius: var(--radius-md);
+  padding: 0.85rem;
+  max-height: 75vh;
+  overflow-y: auto;
+}
+
+.code-markdocx-toc-title {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 0.5rem;
+}
+
+.code-markdocx-toc-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.code-markdocx-toc-item {
+  text-align: left;
+  background: transparent;
+  border: none;
+  padding: 0.28rem 0.45rem;
+  border-radius: var(--radius-xs);
+  color: var(--color-text-secondary);
+  font-size: 0.8rem;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.code-markdocx-toc-item:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-primary);
+}
+
+.code-markdocx-toc-item.is-lvl-1 {
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.code-markdocx-toc-item.is-lvl-2 {
+  padding-left: 0.85rem;
+}
+
+.code-markdocx-toc-item.is-lvl-3 {
+  padding-left: 1.35rem;
+  font-size: 0.76rem;
+}
+
+.code-markdocx-toc-item.is-lvl-4 {
+  padding-left: 1.85rem;
+  font-size: 0.75rem;
+}
+
+/* Rendered Markdown Prose */
+.code-markdocx-prose {
+  color: var(--color-text-primary);
+  font-size: 0.94rem;
+  line-height: 1.7;
+  word-break: break-word;
+}
+
+.code-markdocx-prose-h {
+  color: var(--color-text-primary);
+  scroll-margin-top: 80px;
+  line-height: 1.35;
+}
+
+.code-markdocx-prose-h.is-h1 {
+  font-size: 1.65rem;
+  font-weight: 700;
+  margin: 0 0 1rem;
+  padding-bottom: 0.45rem;
+  border-bottom: 1px solid var(--color-border-primary);
+}
+
+.code-markdocx-prose-h.is-h2 {
+  font-size: 1.32rem;
+  font-weight: 600;
+  margin: 1.6rem 0 0.75rem;
+  padding-bottom: 0.3rem;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.code-markdocx-prose-h.is-h3 {
+  font-size: 1.12rem;
+  font-weight: 600;
+  margin: 1.25rem 0 0.6rem;
+}
+
+.code-markdocx-prose-h.is-h4,
+.code-markdocx-prose-h.is-h5,
+.code-markdocx-prose-h.is-h6 {
+  font-size: 0.98rem;
+  font-weight: 600;
+  margin: 1rem 0 0.45rem;
+}
+
+.code-markdocx-prose-p {
+  margin: 0.65rem 0;
+}
+
+.code-markdocx-prose-list {
+  margin: 0.65rem 0;
+  padding-left: 1.5rem;
+}
+
+.code-markdocx-prose-list li {
+  margin-bottom: 0.32rem;
+}
+
+.code-markdocx-prose-hr {
+  margin: 1.5rem 0;
+  border: none;
+  border-top: 1px solid var(--color-border-primary);
+}
+
+.code-markdocx-inline-code {
+  font-family: var(--font-family-mono);
+  font-size: 0.85em;
+  padding: 0.12rem 0.38rem;
+  border-radius: var(--radius-xs);
+  background: var(--color-bg-muted);
+  border: 1px solid var(--color-border-subtle);
+  color: var(--color-primary);
+}
+
+.code-markdocx-prose-link {
+  color: var(--color-primary);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.code-markdocx-prose-codeblock {
+  margin: 1rem 0;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border-primary);
+  background: var(--color-bg-surface);
+  overflow: hidden;
+}
+
+.code-markdocx-prose-codebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.38rem 0.85rem;
+  font-size: 0.75rem;
+  color: var(--color-text-secondary);
+  background: var(--color-bg-muted);
+  border-bottom: 1px solid var(--color-border-subtle);
+  font-family: var(--font-family-mono);
+}
+
+.code-markdocx-prose-copybtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  border: none;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.code-markdocx-prose-copybtn:hover {
+  color: var(--color-primary);
+}
+
+.code-markdocx-prose-pre {
+  margin: 0;
+  padding: 0.85rem 1rem;
+  overflow-x: auto;
+  font-family: var(--font-family-mono);
+  font-size: 0.82rem;
+  line-height: 1.55;
+}
+
+.code-markdocx-prose-mermaid {
+  margin: 1rem 0;
+}
+
+.code-markdocx-prose-quote {
+  margin: 0.9rem 0;
+  padding: 0.65rem 1rem;
+  border-left: 4px solid var(--color-primary);
+  background: var(--color-bg-surface);
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  color: var(--color-text-secondary);
+}
+
+.code-markdocx-prose-quote p,
+.code-markdocx-md-alert-body p {
+  margin: 0.2rem 0;
+}
+
+.code-markdocx-prose-spacer {
+  height: 0.4rem;
+}
+
+.code-markdocx-md-alert {
+  margin: 1rem 0;
+  padding: 0.8rem 1rem;
+  border-radius: var(--radius-md);
+  border-left: 4px solid var(--color-info);
+  background: var(--color-info-subtle);
+}
+
+.code-markdocx-md-alert.is-tip {
+  border-left-color: var(--color-success);
+  background: var(--color-success-subtle);
+}
+
+.code-markdocx-md-alert.is-warning {
+  border-left-color: var(--color-warning);
+  background: var(--color-warning-subtle);
+}
+
+.code-markdocx-md-alert.is-caution {
+  border-left-color: var(--color-danger);
+  background: var(--color-danger-subtle);
+}
+
+.code-markdocx-md-alert.is-important {
+  border-left-color: var(--color-primary);
+  background: var(--color-primary-subtle);
+}
+
+.code-markdocx-md-alert-title {
+  font-weight: 700;
+  font-size: 0.82rem;
+  margin-bottom: 0.25rem;
+}
+
+.code-markdocx-prose-table-wrap {
+  margin: 1rem 0;
+  overflow-x: auto;
+}
+
+.code-markdocx-prose-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.86rem;
+  background: var(--color-bg-surface);
+  border: 1px solid var(--color-border-primary);
+}
+
+.code-markdocx-prose-table th,
+.code-markdocx-prose-table td {
+  padding: 0.55rem 0.85rem;
+  border-bottom: 1px solid var(--color-border-subtle);
+  border-right: 1px solid var(--color-border-subtle);
+}
+
+.code-markdocx-prose-table th {
+  background: var(--color-bg-muted);
+  font-weight: 600;
+}
+
+.code-markdocx-prose-figure {
+  margin: 1rem 0;
+  padding: 0.75rem;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border-primary);
+  background: var(--color-bg-surface);
+  text-align: center;
+}
+
+.code-markdocx-prose-img {
+  max-width: 100%;
+  max-height: 460px;
+  object-fit: contain;
+  border-radius: var(--radius-sm);
+  cursor: zoom-in;
+}
+
+.code-markdocx-prose-inline-img {
+  max-width: 100%;
+  max-height: 240px;
+  vertical-align: middle;
+  border-radius: var(--radius-xs);
+  cursor: zoom-in;
+}
+
+.code-markdocx-prose-figcaption {
+  margin-top: 0.45rem;
+  font-size: 0.8rem;
+  color: var(--color-text-secondary);
+}
+
 .code-markdocx-spin {
   animation: code-markdocx-spin 1s linear infinite;
 }

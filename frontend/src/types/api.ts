@@ -45,6 +45,7 @@ export interface JobOptions {
   strip_cover: boolean;
   strip_revision_table: boolean;
   skip_vlm: boolean;
+  keep_unconverted_originals?: boolean;
 }
 
 export interface ImageState {
@@ -59,6 +60,9 @@ export interface ImageState {
   status: ImageStatus;
   skipped: boolean;
   skip_reason?: string;
+  keep_original: boolean;
+  asset_filename?: string;
+  has_image_file: boolean;
   unsupported_vector: boolean;
   vector_warning?: string;
   error?: string;
@@ -85,6 +89,7 @@ export interface ImageStats {
   skipped: number;
   low_confidence: number;
   unsupported_vector: number;
+  kept_original: number;
 }
 
 export interface SplitSuggestion {
@@ -143,4 +148,11 @@ export interface ImageMutationResponse {
   image: ImageState;
   markdown: string;
   preflight: PreflightReport;
+}
+
+export interface BatchImagesMutationResponse {
+  images: ImageState[];
+  markdown: string;
+  preflight: PreflightReport;
+  updated_count: number;
 }

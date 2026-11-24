@@ -1,5 +1,6 @@
 import { MODULE_BASE_PATH } from '../constants';
 import type {
+  BatchImagesMutationResponse,
   DiagramCategory,
   DiagramType,
   HealthInfo,
@@ -22,9 +23,23 @@ export function getImageUrl(jobId: string, imageId: string): string {
   return `${getApiBaseUrl()}/jobs/${encodeURIComponent(jobId)}/images/${encodeURIComponent(imageId)}`;
 }
 
-export function getExportUrl(jobId: string, split = false): string {
+export interface ExportUrlOptions {
+  split?: boolean;
+  bundle?: boolean;
+}
+
+export function getExportUrl(jobId: string, opts: boolean | ExportUrlOptions = false): string {
   const base = `${getApiBaseUrl()}/jobs/${encodeURIComponent(jobId)}/export`;
-  return split ? `${base}?split=true` : base;
+  const normalized: ExportUrlOptions = typeof opts === 'boolean' ? { split: opts } : opts;
+  const params = new URLSearchParams();
+  if (normalized.split) {
+    params.set('split', 'true');
+  }
+  if (normalized.bundle) {
+    params.set('bundle', 'true');
+  }
+  const qs = params.toString();
+  return qs ? `${base}?${qs}` : base;
 }
 
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
@@ -69,6 +84,7 @@ export interface CreateJobParams {
   strip_cover: boolean;
   strip_revision_table: boolean;
   skip_vlm: boolean;
+  keep_unconverted_originals: boolean;
 }
 
 export function createJob(params: CreateJobParams): Promise<JobDetail> {
@@ -79,6 +95,7 @@ export function createJob(params: CreateJobParams): Promise<JobDetail> {
   form.append('strip_cover', String(params.strip_cover));
   form.append('strip_revision_table', String(params.strip_revision_table));
   form.append('skip_vlm', String(params.skip_vlm));
+  form.append('keep_unconverted_originals', String(params.keep_unconverted_originals));
   return requestJson<JobDetail>('/jobs', {
     method: 'POST',
     body: form,
@@ -92,6 +109,7 @@ export interface PatchImageParams {
   markdown_table?: string;
   summary?: string;
   skipped?: boolean;
+  keep_original?: boolean;
 }
 
 export function patchImage(
@@ -103,6 +121,25 @@ export function patchImage(
     `/jobs/${encodeURIComponent(jobId)}/images/${encodeURIComponent(imageId)}`,
     {
       method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    },
+  );
+}
+
+export interface KeepOriginalsBatchParams {
+  image_ids?: string[];
+  keep_original?: boolean;
+}
+
+export function keepOriginalsBatch(
+  jobId: string,
+  body: KeepOriginalsBatchParams = { keep_original: true },
+): Promise<BatchImagesMutationResponse> {
+  return requestJson<BatchImagesMutationResponse>(
+    `/jobs/${encodeURIComponent(jobId)}/images/keep-originals`,
+    {
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     },

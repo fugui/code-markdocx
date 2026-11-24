@@ -4,6 +4,7 @@ import {
   AlertTriangle,
   CheckCircle2,
   EyeOff,
+  Image as ImageIcon,
   Loader2,
   Maximize2,
   RefreshCw,
@@ -21,6 +22,7 @@ export interface ImageReviewCardProps {
   image: ImageState;
   syntaxError?: string;
   vlmConfigured: boolean;
+  highlighted?: boolean;
   onSave: (
     imageId: string,
     patch: {
@@ -30,6 +32,7 @@ export interface ImageReviewCardProps {
       markdown_table?: string;
       summary?: string;
       skipped?: boolean;
+      keep_original?: boolean;
     },
   ) => Promise<void>;
   onRetry: (
@@ -50,6 +53,7 @@ export const ImageReviewCard: React.FC<ImageReviewCardProps> = ({
   image,
   syntaxError,
   vlmConfigured,
+  highlighted = false,
   onSave,
   onRetry,
 }) => {
@@ -83,25 +87,33 @@ export const ImageReviewCard: React.FC<ImageReviewCardProps> = ({
 
   const imgSrc = getImageUrl(jobId, image.image_id);
   const isSkipped = image.skipped || image.status === 'skipped';
+  const isKeepOriginal = !isSkipped && Boolean(image.keep_original && image.asset_filename);
+  const canKeepOriginal = Boolean(image.has_image_file && image.asset_filename && !image.unsupported_vector);
   const isTable = category === 'table_screenshot';
-  const hasEdits =
-    mermaidCode !== (image.mermaid_code || '') ||
-    markdownTable !== (image.markdown_table || '') ||
-    summary !== (image.summary || '') ||
-    category !== (image.category || 'uml_diagram') ||
-    diagramType !== (image.diagram_type || 'flowchart');
+  const hasEdits = isKeepOriginal
+    ? summary !== (image.summary || '')
+    : mermaidCode !== (image.mermaid_code || '') ||
+      markdownTable !== (image.markdown_table || '') ||
+      summary !== (image.summary || '') ||
+      category !== (image.category || 'uml_diagram') ||
+      diagramType !== (image.diagram_type || 'flowchart');
 
   const handleSave = async () => {
     setSaving(true);
     try {
-      await onSave(image.image_id, {
-        category,
-        diagram_type: diagramType,
-        mermaid_code: mermaidCode,
-        markdown_table: markdownTable,
-        summary,
-        skipped: false,
-      });
+      await onSave(
+        image.image_id,
+        isKeepOriginal
+          ? { summary, keep_original: true }
+          : {
+              category,
+              diagram_type: diagramType,
+              mermaid_code: mermaidCode,
+              markdown_table: markdownTable,
+              summary,
+              skipped: false,
+            },
+      );
     } finally {
       setSaving(false);
     }
@@ -111,6 +123,15 @@ export const ImageReviewCard: React.FC<ImageReviewCardProps> = ({
     setSaving(true);
     try {
       await onSave(image.image_id, { skipped: !isSkipped });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleToggleKeepOriginal = async () => {
+    setSaving(true);
+    try {
+      await onSave(image.image_id, { keep_original: !isKeepOriginal });
     } finally {
       setSaving(false);
     }
@@ -127,11 +148,12 @@ export const ImageReviewCard: React.FC<ImageReviewCardProps> = ({
 
   return (
     <div
+      id={`image-card-${image.image_id}`}
       className={`code-markdocx-review-card ${isSkipped ? 'is-skipped' : ''} ${
-        syntaxError || image.status === 'failed' || image.unsupported_vector
+        !isKeepOriginal && (syntaxError || image.status === 'failed' || image.unsupported_vector)
           ? 'has-warning'
           : ''
-      }`}
+      } ${highlighted ? 'is-highlighted' : ''}`}
     >
       <div className="code-markdocx-review-header">
         <div className="code-markdocx-review-meta">
@@ -145,10 +167,13 @@ export const ImageReviewCard: React.FC<ImageReviewCardProps> = ({
         </div>
 
         <div className="code-markdocx-review-badges">
-          {image.category && (
+          {isKeepOriginal && (
+            <span className="code-markdocx-pill is-info">引用原图</span>
+          )}
+          {image.category && !isKeepOriginal && (
             <span className="code-markdocx-pill">{CATEGORY_LABELS[image.category]}</span>
           )}
-          {image.confidence && (
+          {image.confidence && !isKeepOriginal && (
             <span
               className={`code-markdocx-pill ${
                 image.confidence === 'low' ? 'is-warning' : 'is-neutral'
@@ -168,6 +193,22 @@ export const ImageReviewCard: React.FC<ImageReviewCardProps> = ({
           >
             {image.status}
           </span>
+          {canKeepOriginal && (
+            <button
+              type="button"
+              className={`code-markdocx-btn is-sm ${isKeepOriginal ? 'is-primary' : 'is-secondary'}`}
+              disabled={saving}
+              onClick={handleToggleKeepOriginal}
+              title={
+                isKeepOriginal
+                  ? '取消原图引用，恢复为 Mermaid/文字模式'
+                  : '在 Markdown 中直接引用原图 assets/，并支持打包下载'
+              }
+            >
+              <ImageIcon size={14} />
+              <span>{isKeepOriginal ? '取消原图' : '引用原图'}</span>
+            </button>
+          )}
           <button
             type="button"
             className="code-markdocx-btn is-ghost is-sm"
@@ -231,12 +272,63 @@ export const ImageReviewCard: React.FC<ImageReviewCardProps> = ({
           )}
         </div>
 
-        {/* 右侧：Mermaid 实时渲染 / 源码编辑 / 修复 */}
+        {/* 右侧：Mermaid 实时渲染 / 源码编辑 / 原图模式 / 修复 */}
         <div className="code-markdocx-review-right">
           {isSkipped ? (
             <div className="code-markdocx-skipped-box">
               已跳过此图（{image.skip_reason || '人工跳过'}），不会输出到最终 Markdown。
             </div>
+          ) : isKeepOriginal ? (
+            <>
+              <div className="code-markdocx-original-box">
+                <div className="code-markdocx-original-box-head">
+                  <ImageIcon size={16} />
+                  <strong>已启用原图引用模式</strong>
+                </div>
+                <p className="code-markdocx-muted">
+                  导出 Markdown 时将保留相对路径引用，顶部可点击「打包下载 (.zip 含原图)」一并导出：
+                </p>
+                <code className="code-markdocx-original-syntax">
+                  {`![${image.caption || image.orig_filename || image.image_id}](assets/${image.asset_filename})`}
+                </code>
+              </div>
+
+              <label className="code-markdocx-field">
+                <span>语义摘要（可选，将紧随图片写入说明）</span>
+                <textarea
+                  rows={2}
+                  className="code-markdocx-textarea"
+                  value={summary}
+                  onChange={(e) => setSummary(e.target.value)}
+                />
+              </label>
+
+              <div className="code-markdocx-card-actions">
+                <button
+                  type="button"
+                  className="code-markdocx-btn is-secondary is-sm"
+                  disabled={saving}
+                  onClick={handleToggleKeepOriginal}
+                >
+                  <span>切换回 Mermaid / 文本模式</span>
+                </button>
+                <button
+                  type="button"
+                  className={`code-markdocx-btn is-sm ${
+                    hasEdits ? 'is-primary' : 'is-secondary'
+                  }`}
+                  disabled={saving || !hasEdits}
+                  onClick={handleSave}
+                >
+                  {saving ? (
+                    <Loader2 size={14} className="code-markdocx-spin" />
+                  ) : (
+                    <Save size={14} />
+                  )}
+                  <span>保存修改</span>
+                </button>
+              </div>
+            </>
           ) : image.status === 'processing' ? (
             <div className="code-markdocx-processing-box">
               <Loader2 size={18} className="code-markdocx-spin" />
@@ -247,7 +339,20 @@ export const ImageReviewCard: React.FC<ImageReviewCardProps> = ({
               {image.status === 'failed' && image.error && (
                 <div className="code-markdocx-alert is-danger">
                   <AlertTriangle size={16} />
-                  <span>{image.error}</span>
+                  <div className="code-markdocx-syntax-err-body">
+                    <span>{image.error}</span>
+                    {canKeepOriginal && (
+                      <button
+                        type="button"
+                        className="code-markdocx-btn is-secondary is-sm"
+                        disabled={saving}
+                        onClick={handleToggleKeepOriginal}
+                      >
+                        <ImageIcon size={14} />
+                        <span>改为引用原图</span>
+                      </button>
+                    )}
+                  </div>
                 </div>
               )}
 

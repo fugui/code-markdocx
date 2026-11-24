@@ -1,7 +1,8 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   FileText,
+  Image as ImageIcon,
   Images,
   Loader2,
   PlusCircle,
@@ -12,6 +13,8 @@ import {
   createJob,
   fetchHealth,
   fetchJobDetail,
+  getImageUrl,
+  keepOriginalsBatch,
   patchImage,
   retryImage,
   type CreateJobParams,
@@ -26,6 +29,7 @@ import type { HealthInfo, JobDetail } from '../types/api';
 import {
   countSyntaxErrors,
   filterImages,
+  isUnconvertedWithImage,
   type ReviewFilter,
 } from '../utils/markdocxUtils';
 import { validateMermaidSyntax } from '../utils/mermaidCheck';
@@ -43,9 +47,20 @@ export const WorkbenchPage: React.FC<WorkbenchPageProps> = ({ routePrefix }) => 
   const [job, setJob] = useState<JobDetail | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [loadingJob, setLoadingJob] = useState(false);
+  const [batchUpdating, setBatchUpdating] = useState(false);
   const [activeTab, setActiveTab] = useState<'images' | 'markdown'>('images');
   const [filter, setFilter] = useState<ReviewFilter>('all');
   const [syntaxErrors, setSyntaxErrors] = useState<Record<string, string | undefined>>({});
+  const [highlightedImageId, setHighlightedImageId] = useState<string | null>(null);
+  const highlightTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (highlightTimerRef.current !== null) {
+        window.clearTimeout(highlightTimerRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     void fetchHealth()
@@ -101,7 +116,12 @@ export const WorkbenchPage: React.FC<WorkbenchPageProps> = ({ routePrefix }) => 
     const checkAll = async () => {
       const next: Record<string, string | undefined> = {};
       for (const img of job.images) {
-        if (img.skipped || img.status === 'skipped' || img.category === 'table_screenshot') {
+        if (
+          img.skipped ||
+          img.status === 'skipped' ||
+          img.keep_original ||
+          img.category === 'table_screenshot'
+        ) {
           continue;
         }
         const code = (img.mermaid_code || '').trim();
@@ -187,6 +207,35 @@ export const WorkbenchPage: React.FC<WorkbenchPageProps> = ({ routePrefix }) => 
     }
   };
 
+  const handleKeepAllUnconvertedOriginals = async () => {
+    if (!job) {
+      return;
+    }
+    setBatchUpdating(true);
+    try {
+      const resp = await keepOriginalsBatch(job.id, { keep_original: true });
+      setJob((prev) =>
+        prev
+          ? {
+              ...prev,
+              images: resp.images,
+              markdown: resp.markdown,
+              preflight: resp.preflight,
+            }
+          : prev,
+      );
+      if (resp.updated_count > 0) {
+        showToast(`已为 ${resp.updated_count} 张未转 Mermaid 图片启用原图引用`, 'success');
+      } else {
+        showToast('当前没有需要切换为原图的图片', 'info');
+      }
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : '批量设置引用原图失败', 'error');
+    } finally {
+      setBatchUpdating(false);
+    }
+  };
+
   const syntaxErrorCount = useMemo(
     () => (job ? countSyntaxErrors(job.images, syntaxErrors) : 0),
     [job, syntaxErrors],
@@ -194,6 +243,55 @@ export const WorkbenchPage: React.FC<WorkbenchPageProps> = ({ routePrefix }) => 
 
   const visibleImages = useMemo(
     () => (job ? filterImages(job.images, filter, syntaxErrors) : []),
+    [job, filter, syntaxErrors],
+  );
+
+  const unconvertedImages = useMemo(
+    () => (job ? job.images.filter(isUnconvertedWithImage) : []),
+    [job],
+  );
+
+  const assetUrlMap = useMemo(() => {
+    if (!job) {
+      return {};
+    }
+    const map: Record<string, string> = {};
+    for (const img of job.images) {
+      if (img.has_image_file && img.asset_filename) {
+        const url = getImageUrl(job.id, img.image_id);
+        map[`assets/${img.asset_filename}`] = url;
+        map[`./assets/${img.asset_filename}`] = url;
+      }
+    }
+    return map;
+  }, [job]);
+
+  const handleLocateImage = useCallback(
+    (imageId: string) => {
+      if (!job) {
+        return;
+      }
+      setActiveTab('images');
+      const currentlyVisible = filterImages(job.images, filter, syntaxErrors).some(
+        (item) => item.image_id === imageId,
+      );
+      if (!currentlyVisible) {
+        setFilter('all');
+      }
+      setHighlightedImageId(imageId);
+      if (highlightTimerRef.current !== null) {
+        window.clearTimeout(highlightTimerRef.current);
+      }
+      window.setTimeout(() => {
+        const el = document.getElementById(`image-card-${imageId}`);
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+      }, 60);
+      highlightTimerRef.current = window.setTimeout(() => {
+        setHighlightedImageId((cur) => (cur === imageId ? null : cur));
+      }, 2200);
+    },
     [job, filter, syntaxErrors],
   );
 
@@ -277,7 +375,10 @@ export const WorkbenchPage: React.FC<WorkbenchPageProps> = ({ routePrefix }) => 
         jobId={job.id}
         markdown={job.markdown}
         preflight={job.preflight}
+        images={job.images}
+        syntaxErrors={syntaxErrors}
         syntaxErrorCount={syntaxErrorCount}
+        onLocateImage={handleLocateImage}
       />
 
       <div className="code-markdocx-tabs-row">
@@ -307,6 +408,7 @@ export const WorkbenchPage: React.FC<WorkbenchPageProps> = ({ routePrefix }) => 
                 ['all', '全部'],
                 ['attention', '需关注'],
                 ['mermaid', 'Mermaid 图'],
+                ['original', '引用原图'],
                 ['skipped', '已跳过'],
               ] as const
             ).map(([key, label]) => (
@@ -319,6 +421,23 @@ export const WorkbenchPage: React.FC<WorkbenchPageProps> = ({ routePrefix }) => 
                 {label}
               </button>
             ))}
+
+            {job.status !== 'running' && unconvertedImages.length > 0 && (
+              <button
+                type="button"
+                className="code-markdocx-btn is-secondary is-sm"
+                disabled={batchUpdating}
+                onClick={() => void handleKeepAllUnconvertedOriginals()}
+                title="将所有未转成 Mermaid 或表格的位图批量改为引用原图（assets/）"
+              >
+                {batchUpdating ? (
+                  <Loader2 size={14} className="code-markdocx-spin" />
+                ) : (
+                  <ImageIcon size={14} />
+                )}
+                <span>未转 Mermaid 图引用原图 ({unconvertedImages.length})</span>
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -341,6 +460,7 @@ export const WorkbenchPage: React.FC<WorkbenchPageProps> = ({ routePrefix }) => 
                 image={img}
                 syntaxError={syntaxErrors[img.image_id]}
                 vlmConfigured={Boolean(health?.vlm_configured)}
+                highlighted={highlightedImageId === img.image_id}
                 onSave={handleSaveImage}
                 onRetry={handleRetryImage}
               />
@@ -348,7 +468,11 @@ export const WorkbenchPage: React.FC<WorkbenchPageProps> = ({ routePrefix }) => 
           </div>
         )
       ) : (
-        <MarkdownPreview markdown={job.markdown} />
+        <MarkdownPreview
+          markdown={job.markdown}
+          assetUrlMap={assetUrlMap}
+          keptOriginalCount={job.preflight.image_stats.kept_original ?? 0}
+        />
       )}
     </div>
   );
