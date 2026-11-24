@@ -4,9 +4,12 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -224,10 +227,14 @@ func (h *Handlers) CreateJob(c *gin.Context) {
 		states[a.ID] = st
 	}
 
+	operator := extractRequestOperator(c)
+	clientIP := c.ClientIP()
+
 	ctx, cancel := context.WithCancel(context.Background())
 	job := &Job{
 		ID:            jobID,
 		Filename:      filename,
+		Operator:      operator,
 		GlossaryHints: glossary,
 		Options:       opts,
 		Status:        JobDone,
@@ -254,6 +261,27 @@ func (h *Handlers) CreateJob(c *gin.Context) {
 		return
 	}
 
+	var skippedCount, vectorCount, keptOrigCount, failedCount int
+	for _, st := range states {
+		switch {
+		case st.Skipped || st.Status == mdpolish.StatusSkipped:
+			skippedCount++
+		case st.UnsupportedVector || st.Status == mdpolish.StatusUnsupportedVector:
+			vectorCount++
+		case st.KeepOriginal:
+			keptOrigCount++
+		case st.Status == mdpolish.StatusFailed:
+			failedCount++
+		}
+	}
+	runningJobs, totalJobs, pendingVLM := h.store.LoadStats()
+	log.Printf(
+		"[code-markdocx] 开始转换: job=%s user=%s ip=%s file=%q size=%s images=%d(待VLM:%d, 跳过:%d, 矢量降级:%d, 原图:%d, 失败:%d) | 服务器负载: running_jobs=%d/%d, pending_vlm_images=%d",
+		jobID, operator, clientIP, filename, formatLogSize(int64(len(docxBytes))),
+		len(states), len(vlmInputs), skippedCount, vectorCount, keptOrigCount, failedCount,
+		runningJobs, totalJobs, pendingVLM,
+	)
+
 	if len(vlmInputs) > 0 {
 		go h.runBatchVLM(ctx, jobID, vlmInputs)
 	}
@@ -267,6 +295,7 @@ func (h *Handlers) CreateJob(c *gin.Context) {
 }
 
 func (h *Handlers) runBatchVLM(ctx context.Context, jobID string, inputs []vlm.ConvertImageInput) {
+	start := time.Now()
 	vlm.ProcessBatch(ctx, h.vlmClient, inputs, h.cfg.VLM.MaxConcurrency, func(prog vlm.BatchProgress) {
 		_ = h.store.MutateJob(jobID, func(job *Job) {
 			job.ProgressDone = prog.Done
@@ -290,6 +319,12 @@ func (h *Handlers) runBatchVLM(ctx context.Context, jobID string, inputs []vlm.C
 		})
 	})
 
+	var (
+		filename string
+		operator string
+		status   JobStatus
+		stats    mdpolish.ImageStats
+	)
 	_ = h.store.MutateJob(jobID, func(job *Job) {
 		if ctx.Err() != nil {
 			job.Status = JobFailed
@@ -297,7 +332,22 @@ func (h *Handlers) runBatchVLM(ctx context.Context, jobID string, inputs []vlm.C
 		} else {
 			job.Status = JobDone
 		}
+		filename = job.Filename
+		operator = job.Operator
+		status = job.Status
+		stats = job.Preflight.ImageStats
 	})
+
+	runningJobs, totalJobs, pendingVLM := h.store.LoadStats()
+	if operator == "" {
+		operator = "anonymous"
+	}
+	log.Printf(
+		"[code-markdocx] 转换完成: job=%s user=%s file=%q status=%s elapsed=%s images=%d(完成:%d, 失败:%d, 原图:%d, 跳过:%d) | 服务器负载: running_jobs=%d/%d, pending_vlm_images=%d",
+		jobID, operator, filename, status, time.Since(start).Round(time.Millisecond),
+		stats.Total, stats.Done, stats.Failed, stats.KeptOriginal, stats.Skipped,
+		runningJobs, totalJobs, pendingVLM,
+	)
 }
 
 func applyVLMResult(st *mdpolish.ImageState, res *vlm.VLMResult) {
@@ -719,4 +769,67 @@ func sanitizeHeaderFilename(s string) string {
 	s = strings.ReplaceAll(s, "\n", "")
 	s = strings.ReplaceAll(s, "\r", "")
 	return s
+}
+
+func sanitizeLogField(s string) string {
+	s = strings.NewReplacer("\r", " ", "\n", " ", "\t", " ").Replace(s)
+	return strings.TrimSpace(s)
+}
+
+func formatLogSize(bytes int64) string {
+	if bytes < 1024 {
+		return fmt.Sprintf("%dB", bytes)
+	}
+	if bytes < 1024*1024 {
+		return fmt.Sprintf("%.1fKB", float64(bytes)/1024)
+	}
+	return fmt.Sprintf("%.2fMB", float64(bytes)/(1024*1024))
+}
+
+func extractRequestOperator(c *gin.Context) string {
+	if authHeader := strings.TrimSpace(c.GetHeader("Authorization")); len(authHeader) > 7 && strings.EqualFold(authHeader[:7], "Bearer ") {
+		token := strings.TrimSpace(authHeader[7:])
+		parts := strings.Split(token, ".")
+		if len(parts) == 3 {
+			if payload, err := base64.RawURLEncoding.DecodeString(parts[1]); err == nil {
+				var claims struct {
+					UserID     uint   `json:"user_id"`
+					Username   string `json:"username"`
+					Email      string `json:"email"`
+					Name       string `json:"name"`
+					EmployeeID string `json:"employee_id"`
+					Sub        string `json:"sub"`
+				}
+				if json.Unmarshal(payload, &claims) == nil {
+					name := sanitizeLogField(claims.Name)
+					email := sanitizeLogField(claims.Email)
+					username := sanitizeLogField(claims.Username)
+					empID := sanitizeLogField(claims.EmployeeID)
+					switch {
+					case name != "" && email != "":
+						return fmt.Sprintf("%s(%s)", name, email)
+					case name != "" && empID != "":
+						return fmt.Sprintf("%s(%s)", name, empID)
+					case name != "":
+						return name
+					case username != "":
+						return username
+					case email != "":
+						return email
+					case claims.UserID > 0:
+						return fmt.Sprintf("uid:%d", claims.UserID)
+					case sanitizeLogField(claims.Sub) != "":
+						return sanitizeLogField(claims.Sub)
+					}
+				}
+			}
+		}
+	}
+
+	for _, hdr := range []string{"X-User-Name", "X-User-Email", "X-User", "X-Forwarded-User"} {
+		if v := sanitizeLogField(c.GetHeader(hdr)); v != "" {
+			return v
+		}
+	}
+	return "anonymous"
 }

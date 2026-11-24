@@ -3,15 +3,18 @@ package server_test
 import (
 	"archive/zip"
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"image"
 	"image/color"
 	"image/png"
 	"io"
+	"log"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -328,4 +331,133 @@ func keysOf(m map[string][]byte) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+type syncLogBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (s *syncLogBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.Write(p)
+}
+
+func (s *syncLogBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.String()
+}
+
+func TestCreateJobLogsOperatorFileImagesAndLoad(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	vlmSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{"message": map[string]string{
+					"content": `{"category":"uml_diagram","diagram_type":"sequence","mermaid_code":"sequenceDiagram\n  A->>B: Ping","summary":"测试图","confidence":"high"}`,
+				}},
+			},
+		})
+	}))
+	defer vlmSrv.Close()
+
+	cfg := config.DefaultConfig()
+	cfg.Storage.TempDir = t.TempDir()
+	cfg.VLM.BaseURL = vlmSrv.URL
+	cfg.VLM.APIKey = "sk-mock"
+	cfg.VLM.Model = "mock-vl"
+
+	store, err := server.NewJobStore(cfg.Storage.TempDir, 60, 10, 524288)
+	if err != nil {
+		t.Fatalf("NewJobStore: %v", err)
+	}
+	defer store.Close()
+
+	vlmClient := vlm.NewClient(vlm.ClientConfig{
+		BaseURL: cfg.VLM.BaseURL,
+		APIKey:  cfg.VLM.APIKey,
+		Model:   cfg.VLM.Model,
+		Timeout: 5 * time.Second,
+	})
+
+	r := gin.New()
+	server.RegisterRoutes(r, server.NewHandlers(cfg, store, vlmClient))
+
+	var logBuf syncLogBuffer
+	origOut := log.Writer()
+	log.SetOutput(&logBuf)
+	defer log.SetOutput(origOut)
+
+	postDocx := func(headers map[string]string) string {
+		var body bytes.Buffer
+		mw := multipart.NewWriter(&body)
+		fw, _ := mw.CreateFormFile("file", "arch.docx")
+		_, _ = fw.Write(buildIntegrationDocx(t))
+		_ = mw.Close()
+
+		req := httptest.NewRequest(http.MethodPost, "/api/jobs", &body)
+		req.Header.Set("Content-Type", mw.FormDataContentType())
+		for k, v := range headers {
+			req.Header.Set(k, v)
+		}
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+		}
+		var detail server.JobDetail
+		if err := json.Unmarshal(rec.Body.Bytes(), &detail); err != nil {
+			t.Fatalf("decode detail: %v", err)
+		}
+		return detail.ID
+	}
+
+	waitDone := func(id string) {
+		for i := 0; i < 40; i++ {
+			getReq := httptest.NewRequest(http.MethodGet, "/api/jobs/"+id, nil)
+			getRec := httptest.NewRecorder()
+			r.ServeHTTP(getRec, getReq)
+			var detail server.JobDetail
+			_ = json.Unmarshal(getRec.Body.Bytes(), &detail)
+			if detail.Status == server.JobDone {
+				return
+			}
+			time.Sleep(25 * time.Millisecond)
+		}
+		t.Fatalf("job %s did not finish in time", id)
+	}
+
+	payloadJSON := `{"name":"张三","email":"zhangsan@example.com","username":"zhangsan"}`
+	jwtToken := "eyJhbGciOiJIUzI1NiJ9." + base64.RawURLEncoding.EncodeToString([]byte(payloadJSON)) + ".sig"
+	job1 := postDocx(map[string]string{"Authorization": "Bearer " + jwtToken})
+	job2 := postDocx(map[string]string{"X-User-Name": "李四"})
+	job3 := postDocx(nil)
+
+	waitDone(job1)
+	waitDone(job2)
+	waitDone(job3)
+	// Allow the log.Printf right after MutateJob(JobDone) to flush
+	time.Sleep(30 * time.Millisecond)
+
+	logs := logBuf.String()
+
+	for _, want := range []string{
+		"[code-markdocx] 开始转换:",
+		"user=张三(zhangsan@example.com)",
+		`file="arch.docx"`,
+		"images=1(待VLM:1",
+		"服务器负载: running_jobs=",
+		"pending_vlm_images=",
+		"[code-markdocx] 转换完成:",
+		"status=done",
+		"user=李四",
+		"user=anonymous",
+	} {
+		if !strings.Contains(logs, want) {
+			t.Fatalf("expected log output to contain %q, got:\n%s", want, logs)
+		}
+	}
 }

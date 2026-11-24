@@ -49,6 +49,7 @@ type ImageFileMeta struct {
 type Job struct {
 	ID            string
 	Filename      string
+	Operator      string
 	GlossaryHints string
 	Options       JobOptions
 	Status        JobStatus
@@ -312,6 +313,22 @@ func (s *JobStore) SnapshotExport(jobID string) (string, string, error) {
 		return "", "", ErrJobNotFound
 	}
 	return job.Filename, job.Markdown, nil
+}
+
+// LoadStats returns current active/running job counts and remaining VLM images across running jobs.
+func (s *JobStore) LoadStats() (runningJobs int, totalJobs int, pendingVLMImages int) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	totalJobs = len(s.jobs)
+	for _, j := range s.jobs {
+		if j.Status == JobRunning {
+			runningJobs++
+			if rem := j.ProgressTotal - j.ProgressDone; rem > 0 {
+				pendingVLMImages += rem
+			}
+		}
+	}
+	return runningJobs, totalJobs, pendingVLMImages
 }
 
 func (s *JobStore) SnapshotBundleExport(jobID string) (string, string, []BundleAsset, error) {
