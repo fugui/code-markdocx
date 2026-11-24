@@ -738,9 +738,10 @@
 }
 
 .code-markdocx-lightbox {
+  /* overlay-guard-ignore: 全屏图片灯箱预览 */
   position: fixed;
   inset: 0;
-  z-index: 2000;
+  z-index: var(--z-index-modal-panel, 1550);
   background: var(--color-bg-overlay);
   backdrop-filter: blur(4px);
   display: flex;
@@ -758,6 +759,7 @@
 }
 
 .code-markdocx-lightbox-close {
+  /* overlay-guard-ignore: 全屏图片灯箱关闭按钮 */
   position: fixed;
   top: 1rem;
   right: 1rem;

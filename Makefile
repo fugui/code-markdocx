@@ -34,6 +34,7 @@ lint-arch:
 			echo "$$bad_pkg_imports"; exit 1; \
 		fi; \
 	fi; \
+	node ../code-common/scripts/check-overlay-guard.mjs $(FRONTEND_DIR)/src; \
 	echo "✅ [ArchGuard Passed] pkg/* pure engine boundaries are clean."
 
 build: $(BINARY)
