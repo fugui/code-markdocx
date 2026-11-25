@@ -1184,21 +1184,6 @@
   font-family: var(--font-family-mono);
 }
 
-.code-markdocx-prose-copybtn {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.25rem;
-  border: none;
-  background: transparent;
-  color: var(--color-text-secondary);
-  font-size: 0.75rem;
-  cursor: pointer;
-}
-
-.code-markdocx-prose-copybtn:hover {
-  color: var(--color-primary);
-}
-
 .code-markdocx-prose-pre {
   margin: 0;
   padding: 0.85rem 1rem;

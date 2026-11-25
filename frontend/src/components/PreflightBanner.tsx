@@ -1,17 +1,16 @@
 import React, { useMemo, useState } from 'react';
 import {
   AlertTriangle,
-  Check,
   CheckCircle2,
   ChevronDown,
   ChevronUp,
-  Copy,
   Download,
   FileArchive,
   Image as ImageIcon,
   MapPin,
   ShieldAlert,
 } from 'lucide-react';
+import { CopyButton } from '@code/common';
 import { getExportUrl } from '../api/client';
 import type { ImageState, PreflightReport } from '../types/api';
 import {
@@ -39,7 +38,6 @@ export const PreflightBanner: React.FC<PreflightBannerProps> = ({
   syntaxErrorCount,
   onLocateImage,
 }) => {
-  const [copied, setCopied] = useState(false);
   const [showSecrets, setShowSecrets] = useState(false);
   const [showErrors, setShowErrors] = useState(true);
   const [showWarns, setShowWarns] = useState(false);
@@ -60,16 +58,6 @@ export const PreflightBanner: React.FC<PreflightBannerProps> = ({
   );
 
   const keptOriginalCount = preflight.image_stats.kept_original ?? 0;
-
-  const handleCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(markdown);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1800);
-    } catch {
-      // ignore clipboard errors
-    }
-  };
 
   return (
     <div className={`code-markdocx-preflight is-${level}`}>
@@ -176,10 +164,13 @@ export const PreflightBanner: React.FC<PreflightBannerProps> = ({
         </div>
 
         <div className="code-markdocx-preflight-actions">
-          <button type="button" className="code-markdocx-btn is-secondary is-sm" onClick={handleCopy}>
-            {copied ? <Check size={14} /> : <Copy size={14} />}
-            <span>{copied ? '已复制' : '复制 Markdown'}</span>
-          </button>
+          <CopyButton
+            text={markdown}
+            label="复制 Markdown"
+            copiedLabel="已复制"
+            variant="secondary"
+            size="sm"
+          />
           <a
             href={getExportUrl(jobId)}
             download

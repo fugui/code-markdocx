@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowUp, Check, Code2, Copy, Eye, ListTree, Loader2, RotateCcw, Wand2 } from 'lucide-react';
+import { ArrowUp, Code2, Eye, ListTree, Loader2, RotateCcw, Wand2 } from 'lucide-react';
+import { CopyButton } from '@code/common';
 import type { FormatStats } from '../types/api';
 import {
   computeScrollTargetTop,
@@ -39,7 +40,6 @@ export const MarkdownPreview: React.FC<MarkdownPreviewProps> = ({
   onPolishLayout,
   onRevertLayoutPolish,
 }) => {
-  const [copied, setCopied] = useState(false);
   const [viewMode, setViewMode] = useState<'rendered' | 'source'>('rendered');
   const [showToc, setShowToc] = useState(true);
   const [activeHeadingId, setActiveHeadingId] = useState<string | null>(null);
@@ -53,16 +53,6 @@ export const MarkdownPreview: React.FC<MarkdownPreviewProps> = ({
     () => formatAutoPolishSummary(formatStats),
     [formatStats],
   );
-
-  const handleCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(markdown);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1800);
-    } catch {
-      // ignore
-    }
-  };
 
   const handleJumpHeading = (id: string) => {
     setActiveHeadingId(id);
@@ -284,14 +274,13 @@ export const MarkdownPreview: React.FC<MarkdownPreviewProps> = ({
             </button>
           )}
 
-          <button
-            type="button"
-            className="code-markdocx-btn is-secondary is-sm"
-            onClick={handleCopy}
-          >
-            {copied ? <Check size={14} /> : <Copy size={14} />}
-            <span>{copied ? '已复制' : '复制全文'}</span>
-          </button>
+          <CopyButton
+            text={markdown}
+            label="复制全文"
+            copiedLabel="已复制"
+            variant="secondary"
+            size="sm"
+          />
         </div>
       </div>
 

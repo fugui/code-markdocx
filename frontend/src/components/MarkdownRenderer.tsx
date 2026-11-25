@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import mermaid from 'mermaid';
-import { Check, Copy, X } from 'lucide-react';
+import { X } from 'lucide-react';
+import { CopyButton } from '@code/common';
 import { MermaidDiagram } from '@code/common/mermaid';
 import {
   resolveAssetImageUrl,
@@ -30,30 +31,19 @@ interface CodeBlockProps {
 }
 
 const CodeBlock: React.FC<CodeBlockProps> = ({ lang, code }) => {
-  const [copied, setCopied] = useState(false);
-
-  const handleCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(code);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1600);
-    } catch {
-      // ignore clipboard errors
-    }
-  };
-
   return (
     <div className="code-markdocx-prose-codeblock">
       <div className="code-markdocx-prose-codebar">
         <span>{lang || 'text'}</span>
-        <button
-          type="button"
-          className="code-markdocx-prose-copybtn"
-          onClick={() => void handleCopy()}
-        >
-          {copied ? <Check size={13} /> : <Copy size={13} />}
-          <span>{copied ? '已复制' : '复制'}</span>
-        </button>
+        <CopyButton
+          text={code}
+          label="复制"
+          copiedLabel="已复制"
+          variant="ghost"
+          size="xs"
+          iconSize={13}
+          resetDelay={1600}
+        />
       </div>
       <pre className="code-markdocx-prose-pre">
         <code>{code}</code>
