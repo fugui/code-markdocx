@@ -12,12 +12,16 @@ import (
 
 	"code-markdocx/pkg/docxparser"
 	"code-markdocx/pkg/mdpolish"
+	"code-markdocx/pkg/vlm"
 )
 
 var (
-	ErrJobNotFound   = errors.New("job not found")
-	ErrImageNotFound = errors.New("image not found")
-	ErrTooManyJobs   = errors.New("too many active jobs running, please wait")
+	ErrJobNotFound            = errors.New("job not found")
+	ErrImageNotFound          = errors.New("image not found")
+	ErrTooManyJobs            = errors.New("too many active jobs running, please wait")
+	ErrJobRunning             = errors.New("job is still running")
+	ErrLayoutPolishInProgress = errors.New("layout polish already in progress")
+	ErrNoLayoutSnapshot       = errors.New("no layout polish snapshot to revert")
 )
 
 type JobStatus string
@@ -34,6 +38,7 @@ type JobOptions struct {
 	StripRevisionTable       bool `json:"strip_revision_table"`
 	SkipVLM                  bool `json:"skip_vlm"`
 	KeepUnconvertedOriginals bool `json:"keep_unconverted_originals"`
+	AILayoutPolish           bool `json:"ai_layout_polish"`
 }
 
 type BundleAsset struct {
@@ -47,26 +52,32 @@ type ImageFileMeta struct {
 }
 
 type Job struct {
-	ID            string
-	Filename      string
-	Operator      string
-	GlossaryHints string
-	Options       JobOptions
-	Status        JobStatus
-	Error         string
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
-	ExpiresAt     time.Time
-	WorkDir       string
-	Doc           *docxparser.DocumentIR
-	ImageOrder    []string
-	Images        map[string]*mdpolish.ImageState
-	ImageFiles    map[string]ImageFileMeta
-	Markdown      string
-	Preflight     mdpolish.PreflightReport
-	ProgressDone  int
-	ProgressTotal int
-	Cancel        context.CancelFunc
+	ID                     string
+	Filename               string
+	Operator               string
+	GlossaryHints          string
+	Options                JobOptions
+	Status                 JobStatus
+	Error                  string
+	CreatedAt              time.Time
+	UpdatedAt              time.Time
+	ExpiresAt              time.Time
+	WorkDir                string
+	Doc                    *docxparser.DocumentIR
+	DocBeforeLayoutPolish  *docxparser.DocumentIR
+	FormatStats            mdpolish.FormatStats
+	LayoutPolished         bool
+	LayoutPolishing        bool
+	LayoutPolishAppliedOps int
+	LayoutPolishSummary    string
+	ImageOrder             []string
+	Images                 map[string]*mdpolish.ImageState
+	ImageFiles             map[string]ImageFileMeta
+	Markdown               string
+	Preflight              mdpolish.PreflightReport
+	ProgressDone           int
+	ProgressTotal          int
+	Cancel                 context.CancelFunc
 }
 
 type JobSummary struct {
@@ -83,21 +94,25 @@ type JobSummary struct {
 }
 
 type JobDetail struct {
-	ID            string                   `json:"id"`
-	Filename      string                   `json:"filename"`
-	GlossaryHints string                   `json:"glossary_hints"`
-	Options       JobOptions               `json:"options"`
-	Status        JobStatus                `json:"status"`
-	Error         string                   `json:"error,omitempty"`
-	CreatedAt     time.Time                `json:"created_at"`
-	UpdatedAt     time.Time                `json:"updated_at"`
-	ExpiresAt     time.Time                `json:"expires_at"`
-	ProgressDone  int                      `json:"progress_done"`
-	ProgressTotal int                      `json:"progress_total"`
-	NoiseStats    docxparser.NoiseStats    `json:"noise_stats"`
-	Images        []*mdpolish.ImageState   `json:"images"`
-	Markdown      string                   `json:"markdown"`
-	Preflight     mdpolish.PreflightReport `json:"preflight"`
+	ID                     string                   `json:"id"`
+	Filename               string                   `json:"filename"`
+	GlossaryHints          string                   `json:"glossary_hints"`
+	Options                JobOptions               `json:"options"`
+	Status                 JobStatus                `json:"status"`
+	Error                  string                   `json:"error,omitempty"`
+	CreatedAt              time.Time                `json:"created_at"`
+	UpdatedAt              time.Time                `json:"updated_at"`
+	ExpiresAt              time.Time                `json:"expires_at"`
+	ProgressDone           int                      `json:"progress_done"`
+	ProgressTotal          int                      `json:"progress_total"`
+	NoiseStats             docxparser.NoiseStats    `json:"noise_stats"`
+	FormatStats            mdpolish.FormatStats     `json:"format_stats"`
+	LayoutPolished         bool                     `json:"layout_polished"`
+	LayoutPolishAppliedOps int                      `json:"layout_polish_applied_ops"`
+	LayoutPolishSummary    string                   `json:"layout_polish_summary,omitempty"`
+	Images                 []*mdpolish.ImageState   `json:"images"`
+	Markdown               string                   `json:"markdown"`
+	Preflight              mdpolish.PreflightReport `json:"preflight"`
 }
 
 type JobStore struct {
@@ -290,6 +305,101 @@ func (s *JobStore) MutateJob(jobID string, fn func(job *Job)) error {
 	return nil
 }
 
+// BeginLayoutPolish validates job state, marks layout polishing active, and returns
+// an isolated deep clone of DocumentIR so LLM calls happen outside the store lock.
+func (s *JobStore) BeginLayoutPolish(jobID string) (*docxparser.DocumentIR, string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	job, ok := s.jobs[jobID]
+	if !ok {
+		return nil, "", ErrJobNotFound
+	}
+	if job.Status == JobRunning {
+		return nil, "", ErrJobRunning
+	}
+	if job.LayoutPolishing {
+		return nil, "", ErrLayoutPolishInProgress
+	}
+	job.LayoutPolishing = true
+	return mdpolish.CloneDocumentIR(job.Doc), job.GlossaryHints, nil
+}
+
+func (s *JobStore) CancelLayoutPolishFlag(jobID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if job, ok := s.jobs[jobID]; ok {
+		job.LayoutPolishing = false
+	}
+}
+
+func (s *JobStore) FinishLayoutPolish(
+	jobID string,
+	ops []vlm.LayoutPolishOp,
+	summary string,
+) (markdown string, preflight mdpolish.PreflightReport, applied int, totalApplied int, polished bool, finalSummary string, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	job, ok := s.jobs[jobID]
+	if !ok {
+		return "", mdpolish.PreflightReport{}, 0, 0, false, "", ErrJobNotFound
+	}
+	job.LayoutPolishing = false
+
+	if len(ops) > 0 && job.Doc != nil {
+		var snapshot *docxparser.DocumentIR
+		if job.DocBeforeLayoutPolish == nil {
+			snapshot = mdpolish.CloneDocumentIR(job.Doc)
+		}
+		applied = mdpolish.ApplyLayoutPolishOps(job.Doc, ops)
+		if applied > 0 {
+			if job.DocBeforeLayoutPolish == nil {
+				job.DocBeforeLayoutPolish = snapshot
+			}
+			job.LayoutPolished = true
+			job.LayoutPolishAppliedOps += applied
+			job.LayoutPolishSummary = summary
+			job.UpdatedAt = time.Now()
+			s.reassembleLocked(job)
+		}
+	}
+
+	if applied == 0 && !job.LayoutPolished {
+		if summary != "" {
+			job.LayoutPolishSummary = summary
+		} else {
+			job.LayoutPolishSummary = "文档结构已较为清晰，未发现需要调整的排版项"
+		}
+	}
+
+	return job.Markdown, job.Preflight, applied, job.LayoutPolishAppliedOps, job.LayoutPolished, job.LayoutPolishSummary, nil
+}
+
+func (s *JobStore) RevertLayoutPolish(jobID string) (string, mdpolish.PreflightReport, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	job, ok := s.jobs[jobID]
+	if !ok {
+		return "", mdpolish.PreflightReport{}, ErrJobNotFound
+	}
+	if job.Status == JobRunning {
+		return "", mdpolish.PreflightReport{}, ErrJobRunning
+	}
+	if job.LayoutPolishing {
+		return "", mdpolish.PreflightReport{}, ErrLayoutPolishInProgress
+	}
+	if job.DocBeforeLayoutPolish == nil {
+		return "", mdpolish.PreflightReport{}, ErrNoLayoutSnapshot
+	}
+	job.Doc = mdpolish.CloneDocumentIR(job.DocBeforeLayoutPolish)
+	job.DocBeforeLayoutPolish = nil
+	job.LayoutPolished = false
+	job.LayoutPolishAppliedOps = 0
+	job.LayoutPolishSummary = ""
+	job.UpdatedAt = time.Now()
+	s.reassembleLocked(job)
+	return job.Markdown, job.Preflight, nil
+}
+
 func (s *JobStore) SnapshotImageForRetry(jobID, imgID string) (ImageFileMeta, mdpolish.ImageState, string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -389,21 +499,25 @@ func (s *JobStore) toDetailLocked(job *Job) *JobDetail {
 		ns = job.Doc.NoiseStats
 	}
 	return &JobDetail{
-		ID:            job.ID,
-		Filename:      job.Filename,
-		GlossaryHints: job.GlossaryHints,
-		Options:       job.Options,
-		Status:        job.Status,
-		Error:         job.Error,
-		CreatedAt:     job.CreatedAt,
-		UpdatedAt:     job.UpdatedAt,
-		ExpiresAt:     job.ExpiresAt,
-		ProgressDone:  job.ProgressDone,
-		ProgressTotal: job.ProgressTotal,
-		NoiseStats:    ns,
-		Images:        imgs,
-		Markdown:      job.Markdown,
-		Preflight:     job.Preflight,
+		ID:                     job.ID,
+		Filename:               job.Filename,
+		GlossaryHints:          job.GlossaryHints,
+		Options:                job.Options,
+		Status:                 job.Status,
+		Error:                  job.Error,
+		CreatedAt:              job.CreatedAt,
+		UpdatedAt:              job.UpdatedAt,
+		ExpiresAt:              job.ExpiresAt,
+		ProgressDone:           job.ProgressDone,
+		ProgressTotal:          job.ProgressTotal,
+		NoiseStats:             ns,
+		FormatStats:            job.FormatStats,
+		LayoutPolished:         job.LayoutPolished,
+		LayoutPolishAppliedOps: job.LayoutPolishAppliedOps,
+		LayoutPolishSummary:    job.LayoutPolishSummary,
+		Images:                 imgs,
+		Markdown:               job.Markdown,
+		Preflight:              job.Preflight,
 	}
 }
 

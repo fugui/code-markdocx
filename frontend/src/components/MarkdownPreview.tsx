@@ -1,9 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowUp, Check, Code2, Copy, Eye, ListTree } from 'lucide-react';
+import { ArrowUp, Check, Code2, Copy, Eye, ListTree, Loader2, RotateCcw, Wand2 } from 'lucide-react';
+import type { FormatStats } from '../types/api';
 import {
   computeScrollTargetTop,
   extractHeadings,
   findActiveHeadingId,
+  formatAutoPolishSummary,
   type HeadingOffset,
 } from '../utils/markdocxUtils';
 import { MarkdownRenderer } from './MarkdownRenderer';
@@ -12,12 +14,30 @@ export interface MarkdownPreviewProps {
   markdown: string;
   assetUrlMap?: Record<string, string>;
   keptOriginalCount?: number;
+  formatStats?: FormatStats;
+  vlmConfigured?: boolean;
+  jobRunning?: boolean;
+  layoutPolished?: boolean;
+  layoutPolishAppliedOps?: number;
+  layoutPolishSummary?: string;
+  layoutPolishing?: boolean;
+  onPolishLayout?: () => void;
+  onRevertLayoutPolish?: () => void;
 }
 
 export const MarkdownPreview: React.FC<MarkdownPreviewProps> = ({
   markdown,
   assetUrlMap,
   keptOriginalCount = 0,
+  formatStats,
+  vlmConfigured = false,
+  jobRunning = false,
+  layoutPolished = false,
+  layoutPolishAppliedOps = 0,
+  layoutPolishSummary,
+  layoutPolishing = false,
+  onPolishLayout,
+  onRevertLayoutPolish,
 }) => {
   const [copied, setCopied] = useState(false);
   const [viewMode, setViewMode] = useState<'rendered' | 'source'>('rendered');
@@ -29,6 +49,10 @@ export const MarkdownPreview: React.FC<MarkdownPreviewProps> = ({
   const tocListRef = useRef<HTMLElement | null>(null);
 
   const headings = useMemo(() => extractHeadings(markdown), [markdown]);
+  const autoPolishSummary = useMemo(
+    () => formatAutoPolishSummary(formatStats),
+    [formatStats],
+  );
 
   const handleCopy = async () => {
     try {
@@ -169,6 +193,9 @@ export const MarkdownPreview: React.FC<MarkdownPreviewProps> = ({
               ? `已实时渲染 Mermaid 与 ${keptOriginalCount} 张引用原图，支持与源码对照及合并打包下载（.zip）。`
               : '已剥离页眉页脚与 Base64 内嵌图像，支持富文本/Mermaid 实时渲染与源码一键复制。'}
           </p>
+          {autoPolishSummary && (
+            <p className="code-markdocx-format-summary">{autoPolishSummary}</p>
+          )}
         </div>
 
         <div className="code-markdocx-preview-toolbar">
@@ -203,6 +230,57 @@ export const MarkdownPreview: React.FC<MarkdownPreviewProps> = ({
             >
               <ListTree size={14} />
               <span>目录大纲 ({headings.length})</span>
+            </button>
+          )}
+
+          {layoutPolished && (
+            <span
+              className="code-markdocx-pill is-success"
+              title={layoutPolishSummary || '已应用 AI 结构化排版优化'}
+            >
+              AI 排版已优化 ({layoutPolishAppliedOps} 处)
+            </span>
+          )}
+
+          {onPolishLayout && (
+            <button
+              type="button"
+              className="code-markdocx-btn is-secondary is-sm"
+              disabled={layoutPolishing || jobRunning || !vlmConfigured}
+              onClick={onPolishLayout}
+              title={
+                !vlmConfigured
+                  ? '服务端 config.yaml 未配置有效 VLM 模型'
+                  : jobRunning
+                    ? '请等待后台转译完成'
+                    : '仅调整标题、列表、引用与错误断行结构，绝不改写正文文字'
+              }
+            >
+              {layoutPolishing ? (
+                <Loader2 size={14} className="code-markdocx-spin" />
+              ) : (
+                <Wand2 size={14} />
+              )}
+              <span>
+                {layoutPolishing
+                  ? 'AI 排版优化中...'
+                  : layoutPolished
+                    ? '再次 AI 排版'
+                    : 'AI 排版优化'}
+              </span>
+            </button>
+          )}
+
+          {layoutPolished && onRevertLayoutPolish && (
+            <button
+              type="button"
+              className="code-markdocx-btn is-secondary is-sm"
+              disabled={layoutPolishing || jobRunning}
+              onClick={onRevertLayoutPolish}
+              title="撤销 AI 结构化排版优化，恢复至规则规整后的版本"
+            >
+              <RotateCcw size={14} />
+              <span>撤销 AI 排版</span>
             </button>
           )}
 

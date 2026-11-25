@@ -18,6 +18,7 @@ const (
 	BlockHeading   BlockKind = "heading"
 	BlockParagraph BlockKind = "paragraph"
 	BlockListItem  BlockKind = "list_item"
+	BlockQuote     BlockKind = "quote"
 	BlockTable     BlockKind = "table"
 	BlockImage     BlockKind = "image"
 	BlockCode      BlockKind = "code"
@@ -30,6 +31,7 @@ type Block struct {
 	Language  string     `json:"language,omitempty"`
 	Ordered   bool       `json:"ordered,omitempty"`
 	Indent    int        `json:"indent,omitempty"`
+	AlertType string     `json:"alert_type,omitempty"`
 	TableRows [][]string `json:"table_rows,omitempty"`
 	ImageID   string     `json:"image_id,omitempty"`
 }

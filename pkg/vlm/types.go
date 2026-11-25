@@ -101,3 +101,56 @@ type CodePolishProgress struct {
 	Result *CodePolishResult
 	Err    error
 }
+
+type LayoutOpType string
+
+const (
+	LayoutOpSetHeading      LayoutOpType = "set_heading"
+	LayoutOpSetParagraph    LayoutOpType = "set_paragraph"
+	LayoutOpSetListItem     LayoutOpType = "set_list_item"
+	LayoutOpSetQuote        LayoutOpType = "set_quote"
+	LayoutOpSetAlert        LayoutOpType = "set_alert"
+	LayoutOpMergeParagraphs LayoutOpType = "merge_paragraphs"
+)
+
+type LayoutBlockSummary struct {
+	Index       int    `json:"index"`
+	Kind        string `json:"kind"`
+	Level       int    `json:"level,omitempty"`
+	Ordered     bool   `json:"ordered,omitempty"`
+	AlertType   string `json:"alert_type,omitempty"`
+	TextPreview string `json:"text_preview"`
+	CharCount   int    `json:"char_count"`
+	Immutable   bool   `json:"immutable,omitempty"`
+}
+
+type LayoutPolishInput struct {
+	ChunkID       string
+	DocTitle      string
+	GlossaryHints string
+	Blocks        []LayoutBlockSummary
+}
+
+type LayoutPolishOp struct {
+	Op         LayoutOpType `json:"op"`
+	Block      int          `json:"block,omitempty"`
+	Level      int          `json:"level,omitempty"`
+	Ordered    bool         `json:"ordered,omitempty"`
+	Indent     int          `json:"indent,omitempty"`
+	AlertType  string       `json:"alert_type,omitempty"`
+	StartBlock int          `json:"start_block,omitempty"`
+	EndBlock   int          `json:"end_block,omitempty"`
+}
+
+type LayoutPolishResult struct {
+	Ops     []LayoutPolishOp `json:"ops"`
+	Summary string           `json:"summary"`
+}
+
+type LayoutPolishProgress struct {
+	ChunkID string
+	Done    int
+	Total   int
+	Result  *LayoutPolishResult
+	Err     error
+}

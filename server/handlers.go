@@ -53,6 +53,8 @@ func RegisterRoutes(r *gin.Engine, h *Handlers) {
 		api.POST("/jobs/:id/images/keep-originals", h.KeepOriginalsBatch)
 		api.PATCH("/jobs/:id/images/:img_id", h.PatchImage)
 		api.POST("/jobs/:id/images/:img_id/retry", h.RetryImage)
+		api.POST("/jobs/:id/layout-polish", h.PolishJobLayout)
+		api.POST("/jobs/:id/layout-polish/revert", h.RevertJobLayoutPolish)
 		api.GET("/jobs/:id/export", h.ExportJob)
 	}
 }
@@ -117,6 +119,7 @@ func (h *Handlers) CreateJob(c *gin.Context) {
 		StripRevisionTable:       parseBoolForm(c.PostForm("strip_revision_table"), h.cfg.Convert.StripRevisionTable),
 		SkipVLM:                  parseBoolForm(c.PostForm("skip_vlm"), false),
 		KeepUnconvertedOriginals: parseBoolForm(c.PostForm("keep_unconverted_originals"), false),
+		AILayoutPolish:           parseBoolForm(c.PostForm("ai_layout_polish"), false),
 	}
 	glossary := strings.TrimSpace(c.PostForm("glossary"))
 
@@ -129,6 +132,7 @@ func (h *Handlers) CreateJob(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "解析 .docx 失败: " + err.Error()})
 		return
 	}
+	formatStats := mdpolish.FormatDocument(doc)
 
 	jobID := uuid.NewString()
 	workDir, err := h.store.CreateJobDir(jobID)
@@ -228,10 +232,14 @@ func (h *Handlers) CreateJob(c *gin.Context) {
 		states[a.ID] = st
 	}
 
+	var layoutChunks []vlm.LayoutPolishInput
 	if !opts.SkipVLM && vlmConfigured {
 		codeTasks = mdpolish.ExtractCodePolishTasks(doc, glossary, 12)
+		if opts.AILayoutPolish {
+			layoutChunks = mdpolish.ExtractLayoutPolishChunks(doc, glossary, 8)
+		}
 	}
-	totalProgress := len(vlmInputs) + len(codeTasks)
+	totalProgress := len(vlmInputs) + len(codeTasks) + len(layoutChunks)
 
 	operator := extractRequestOperator(c)
 	clientIP := c.ClientIP()
@@ -246,6 +254,7 @@ func (h *Handlers) CreateJob(c *gin.Context) {
 		Status:        JobDone,
 		WorkDir:       workDir,
 		Doc:           doc,
+		FormatStats:   formatStats,
 		ImageOrder:    imageOrder,
 		Images:        states,
 		ImageFiles:    imageFiles,
@@ -289,7 +298,7 @@ func (h *Handlers) CreateJob(c *gin.Context) {
 	)
 
 	if totalProgress > 0 {
-		go h.runBatchVLM(ctx, jobID, vlmInputs, codeTasks)
+		go h.runBatchVLM(ctx, jobID, vlmInputs, codeTasks, layoutChunks)
 	}
 
 	detail, err := h.store.GetDetail(jobID)
@@ -300,7 +309,13 @@ func (h *Handlers) CreateJob(c *gin.Context) {
 	c.JSON(http.StatusCreated, detail)
 }
 
-func (h *Handlers) runBatchVLM(ctx context.Context, jobID string, inputs []vlm.ConvertImageInput, codeTasks []mdpolish.CodePolishTask) {
+func (h *Handlers) runBatchVLM(
+	ctx context.Context,
+	jobID string,
+	inputs []vlm.ConvertImageInput,
+	codeTasks []mdpolish.CodePolishTask,
+	layoutChunks []vlm.LayoutPolishInput,
+) {
 	start := time.Now()
 	if len(inputs) > 0 {
 		vlm.ProcessBatch(ctx, h.vlmClient, inputs, h.cfg.VLM.MaxConcurrency, func(prog vlm.BatchProgress) {
@@ -341,6 +356,33 @@ func (h *Handlers) runBatchVLM(ctx context.Context, jobID string, inputs []vlm.C
 		if len(codeResults) > 0 {
 			_ = h.store.MutateJob(jobID, func(job *Job) {
 				mdpolish.ApplyCodePolishResults(job.Doc, codeTasks, codeResults)
+			})
+		}
+	}
+
+	if len(layoutChunks) > 0 && ctx.Err() == nil {
+		baseDone := len(inputs) + len(codeTasks)
+		layoutResults, layoutErr := vlm.ProcessLayoutPolishBatch(ctx, h.vlmClient, layoutChunks, h.cfg.VLM.MaxConcurrency, func(prog vlm.LayoutPolishProgress) {
+			_ = h.store.MutateJob(jobID, func(job *Job) {
+				job.ProgressDone = baseDone + prog.Done
+			})
+		})
+		if layoutErr == nil && len(layoutResults) > 0 {
+			allOps, orderedIDs := collectLayoutOps(layoutChunks, layoutResults)
+			_ = h.store.MutateJob(jobID, func(job *Job) {
+				if job.Doc == nil {
+					return
+				}
+				snapshot := mdpolish.CloneDocumentIR(job.Doc)
+				applied := mdpolish.ApplyLayoutPolishOps(job.Doc, allOps)
+				if applied > 0 {
+					if job.DocBeforeLayoutPolish == nil {
+						job.DocBeforeLayoutPolish = snapshot
+					}
+					job.LayoutPolished = true
+					job.LayoutPolishAppliedOps += applied
+				}
+				job.LayoutPolishSummary = mdpolish.CombineLayoutSummaries(layoutResults, orderedIDs, applied)
 			})
 		}
 	}
@@ -688,6 +730,137 @@ func (h *Handlers) RetryImage(c *gin.Context) {
 		"image":     st,
 		"markdown":  md,
 		"preflight": preflight,
+	})
+}
+
+func collectLayoutOps(
+	chunks []vlm.LayoutPolishInput,
+	results map[string]*vlm.LayoutPolishResult,
+) ([]vlm.LayoutPolishOp, []string) {
+	orderedIDs := make([]string, 0, len(chunks))
+	var allOps []vlm.LayoutPolishOp
+	for _, ch := range chunks {
+		orderedIDs = append(orderedIDs, ch.ChunkID)
+		if res := results[ch.ChunkID]; res != nil && len(res.Ops) > 0 {
+			allOps = append(allOps, res.Ops...)
+		}
+	}
+	return allOps, orderedIDs
+}
+
+func (h *Handlers) PolishJobLayout(c *gin.Context) {
+	if !h.cfg.VLM.IsConfigured() || h.vlmClient == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "服务端 config.yaml 未配置有效 VLM 模型"})
+		return
+	}
+
+	jobID := c.Param("id")
+	docSnap, glossary, err := h.store.BeginLayoutPolish(jobID)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrJobNotFound):
+			c.JSON(http.StatusNotFound, gin.H{"error": "任务不存在或已过期"})
+		case errors.Is(err, ErrJobRunning):
+			c.JSON(http.StatusConflict, gin.H{"error": "任务仍在后台转译中，请等待完成后再执行 AI 排版优化"})
+		case errors.Is(err, ErrLayoutPolishInProgress):
+			c.JSON(http.StatusConflict, gin.H{"error": "AI 排版优化正在进行中，请勿重复提交"})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		}
+		return
+	}
+
+	chunks := mdpolish.ExtractLayoutPolishChunks(docSnap, glossary, 8)
+	if len(chunks) == 0 {
+		md, preflight, applied, totalApplied, polished, summary, finishErr := h.store.FinishLayoutPolish(
+			jobID,
+			nil,
+			"当前文档不包含可优化的正文段落结构",
+		)
+		if finishErr != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "任务不存在或已过期"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"markdown":                  md,
+			"preflight":                 preflight,
+			"applied_ops":               applied,
+			"layout_polished":           polished,
+			"layout_polish_applied_ops": totalApplied,
+			"layout_polish_summary":     summary,
+		})
+		return
+	}
+
+	start := time.Now()
+	timeout := time.Duration(h.cfg.VLM.TimeoutSeconds) * time.Second
+	if timeout <= 0 {
+		timeout = 90 * time.Second
+	}
+	if len(chunks) > 1 {
+		timeout *= 2
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), timeout)
+	defer cancel()
+
+	results, batchErr := vlm.ProcessLayoutPolishBatch(ctx, h.vlmClient, chunks, h.cfg.VLM.MaxConcurrency, nil)
+	if batchErr != nil {
+		h.store.CancelLayoutPolishFlag(jobID)
+		c.JSON(http.StatusBadGateway, gin.H{"error": "AI 排版优化调用失败: " + batchErr.Error()})
+		return
+	}
+
+	allOps, orderedIDs := collectLayoutOps(chunks, results)
+	rawSummary := mdpolish.CombineLayoutSummaries(results, orderedIDs, len(allOps))
+	md, preflight, applied, totalApplied, polished, finalSummary, finishErr := h.store.FinishLayoutPolish(
+		jobID,
+		allOps,
+		rawSummary,
+	)
+	if finishErr != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "任务不存在或已过期"})
+		return
+	}
+
+	log.Printf(
+		"[code-markdocx] AI 排版优化: job=%s elapsed=%s chunks=%d ops=%d applied=%d",
+		jobID, time.Since(start).Round(time.Millisecond), len(chunks), len(allOps), applied,
+	)
+
+	c.JSON(http.StatusOK, gin.H{
+		"markdown":                  md,
+		"preflight":                 preflight,
+		"applied_ops":               applied,
+		"layout_polished":           polished,
+		"layout_polish_applied_ops": totalApplied,
+		"layout_polish_summary":     finalSummary,
+	})
+}
+
+func (h *Handlers) RevertJobLayoutPolish(c *gin.Context) {
+	jobID := c.Param("id")
+	md, preflight, err := h.store.RevertLayoutPolish(jobID)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrJobNotFound):
+			c.JSON(http.StatusNotFound, gin.H{"error": "任务不存在或已过期"})
+		case errors.Is(err, ErrJobRunning), errors.Is(err, ErrLayoutPolishInProgress):
+			c.JSON(http.StatusConflict, gin.H{"error": "任务或排版优化正在执行中，请稍后再试"})
+		case errors.Is(err, ErrNoLayoutSnapshot):
+			c.JSON(http.StatusBadRequest, gin.H{"error": "当前任务尚未执行 AI 排版优化，无需撤销"})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		}
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"markdown":                  md,
+		"preflight":                 preflight,
+		"applied_ops":               0,
+		"layout_polished":           false,
+		"layout_polish_applied_ops": 0,
+		"layout_polish_summary":     "",
 	})
 }
 

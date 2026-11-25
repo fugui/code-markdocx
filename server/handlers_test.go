@@ -606,3 +606,138 @@ func TestCodePolishNoImageDocxAndCodeScreenshotPatch(t *testing.T) {
 		t.Fatalf("patch code_screenshot failed: %d %s", patchRec.Code, patchRec.Body.String())
 	}
 }
+
+func TestLayoutPolishAndRevertFlow(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	vlmSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{"message": map[string]string{
+					"content": `{"ops":[{"op":"set_heading","block":1,"level":2},{"op":"merge_paragraphs","start_block":2,"end_block":3}],"summary":"提升子标题并合并误断行段落"}`,
+				}},
+			},
+		})
+	}))
+	defer vlmSrv.Close()
+
+	cfg := config.DefaultConfig()
+	cfg.Storage.TempDir = t.TempDir()
+	cfg.VLM.BaseURL = vlmSrv.URL
+	cfg.VLM.APIKey = "sk-mock"
+	cfg.VLM.Model = "mock-vl"
+
+	store, err := server.NewJobStore(cfg.Storage.TempDir, 60, 10, 524288)
+	if err != nil {
+		t.Fatalf("NewJobStore: %v", err)
+	}
+	defer store.Close()
+
+	vlmClient := vlm.NewClient(vlm.ClientConfig{
+		BaseURL: cfg.VLM.BaseURL,
+		APIKey:  cfg.VLM.APIKey,
+		Model:   cfg.VLM.Model,
+		Timeout: 5 * time.Second,
+	})
+
+	r := gin.New()
+	server.RegisterRoutes(r, server.NewHandlers(cfg, store, vlmClient))
+
+	var docxBuf bytes.Buffer
+	zw := zip.NewWriter(&docxBuf)
+	wStyles, _ := zw.Create("word/styles.xml")
+	_, _ = wStyles.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?><w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/></w:style></w:styles>`))
+	wDoc, _ := zw.Create("word/document.xml")
+	_, _ = wDoc.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>系统概览</w:t></w:r></w:p>
+    <w:p><w:r><w:t>设计目标</w:t></w:r></w:p>
+    <w:p><w:r><w:t>第一部分正文被换行拆开，</w:t></w:r></w:p>
+    <w:p><w:r><w:t>这里继续补充说明。</w:t></w:r></w:p>
+    <w:p><w:r><w:t>• 自动转成列表项</w:t></w:r></w:p>
+  </w:body>
+</w:document>`))
+	_ = zw.Close()
+
+	// 1. Upload with ai_layout_polish=true
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	fw, _ := mw.CreateFormFile("file", "layout.docx")
+	_, _ = fw.Write(docxBuf.Bytes())
+	_ = mw.WriteField("ai_layout_polish", "true")
+	_ = mw.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/jobs", &body)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var created server.JobDetail
+	_ = json.Unmarshal(rec.Body.Bytes(), &created)
+	if created.FormatStats.NormalizedLists != 1 {
+		t.Fatalf("expected rule normalized_lists=1, got %+v", created.FormatStats)
+	}
+
+	var detail server.JobDetail
+	for i := 0; i < 40; i++ {
+		getReq := httptest.NewRequest(http.MethodGet, "/api/jobs/"+created.ID, nil)
+		getRec := httptest.NewRecorder()
+		r.ServeHTTP(getRec, getReq)
+		_ = json.Unmarshal(getRec.Body.Bytes(), &detail)
+		if detail.Status == server.JobDone {
+			break
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	if detail.Status != server.JobDone || !detail.LayoutPolished || detail.LayoutPolishAppliedOps != 2 {
+		t.Fatalf("expected layout polished job done, got status=%s polished=%v ops=%d", detail.Status, detail.LayoutPolished, detail.LayoutPolishAppliedOps)
+	}
+	if !strings.Contains(detail.Markdown, "## 设计目标") || !strings.Contains(detail.Markdown, "第一部分正文被换行拆开，这里继续补充说明。") {
+		t.Fatalf("unexpected polished markdown:\n%s", detail.Markdown)
+	}
+
+	// 2. Revert layout polish
+	revReq := httptest.NewRequest(http.MethodPost, "/api/jobs/"+created.ID+"/layout-polish/revert", nil)
+	revRec := httptest.NewRecorder()
+	r.ServeHTTP(revRec, revReq)
+	if revRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 on revert, got %d: %s", revRec.Code, revRec.Body.String())
+	}
+	var revResp struct {
+		Markdown       string `json:"markdown"`
+		LayoutPolished bool   `json:"layout_polished"`
+	}
+	_ = json.Unmarshal(revRec.Body.Bytes(), &revResp)
+	if revResp.LayoutPolished || strings.Contains(revResp.Markdown, "## 设计目标") {
+		t.Fatalf("expected reverted markdown, got:\n%s", revResp.Markdown)
+	}
+
+	// Second revert without snapshot returns 400
+	revReq2 := httptest.NewRequest(http.MethodPost, "/api/jobs/"+created.ID+"/layout-polish/revert", nil)
+	revRec2 := httptest.NewRecorder()
+	r.ServeHTTP(revRec2, revReq2)
+	if revRec2.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 on duplicate revert, got %d", revRec2.Code)
+	}
+
+	// 3. Manual layout-polish endpoint
+	polReq := httptest.NewRequest(http.MethodPost, "/api/jobs/"+created.ID+"/layout-polish", nil)
+	polRec := httptest.NewRecorder()
+	r.ServeHTTP(polRec, polReq)
+	if polRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 on manual layout-polish, got %d: %s", polRec.Code, polRec.Body.String())
+	}
+	var polResp struct {
+		Markdown       string `json:"markdown"`
+		AppliedOps     int    `json:"applied_ops"`
+		LayoutPolished bool   `json:"layout_polished"`
+	}
+	_ = json.Unmarshal(polRec.Body.Bytes(), &polResp)
+	if !polResp.LayoutPolished || polResp.AppliedOps != 2 || !strings.Contains(polResp.Markdown, "## 设计目标") {
+		t.Fatalf("unexpected manual polish response: %+v", polResp)
+	}
+}

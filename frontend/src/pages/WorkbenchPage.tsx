@@ -16,7 +16,9 @@ import {
   getImageUrl,
   keepOriginalsBatch,
   patchImage,
+  polishJobLayout,
   retryImage,
+  revertJobLayoutPolish,
   type CreateJobParams,
   type PatchImageParams,
   type RetryImageParams,
@@ -48,6 +50,7 @@ export const WorkbenchPage: React.FC<WorkbenchPageProps> = ({ routePrefix }) => 
   const [submitting, setSubmitting] = useState(false);
   const [loadingJob, setLoadingJob] = useState(false);
   const [batchUpdating, setBatchUpdating] = useState(false);
+  const [layoutPolishing, setLayoutPolishing] = useState(false);
   const [activeTab, setActiveTab] = useState<'images' | 'markdown'>('images');
   const [filter, setFilter] = useState<ReviewFilter>('all');
   const [syntaxErrors, setSyntaxErrors] = useState<Record<string, string | undefined>>({});
@@ -234,6 +237,70 @@ export const WorkbenchPage: React.FC<WorkbenchPageProps> = ({ routePrefix }) => 
       showToast(err instanceof Error ? err.message : '批量设置引用原图失败', 'error');
     } finally {
       setBatchUpdating(false);
+    }
+  };
+
+  const handleLayoutPolish = async () => {
+    if (!job || layoutPolishing) {
+      return;
+    }
+    setLayoutPolishing(true);
+    try {
+      const resp = await polishJobLayout(job.id);
+      setJob((prev) =>
+        prev
+          ? {
+              ...prev,
+              markdown: resp.markdown,
+              preflight: resp.preflight,
+              layout_polished: resp.layout_polished,
+              layout_polish_applied_ops: resp.layout_polish_applied_ops,
+              layout_polish_summary: resp.layout_polish_summary,
+            }
+          : prev,
+      );
+      if (resp.applied_ops > 0) {
+        showToast(
+          `AI 结构化排版完成，已应用 ${resp.applied_ops} 处结构优化`,
+          'success',
+        );
+      } else {
+        showToast(
+          resp.layout_polish_summary || '文档结构已清晰，无需额外调整',
+          'info',
+        );
+      }
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'AI 排版优化失败', 'error');
+    } finally {
+      setLayoutPolishing(false);
+    }
+  };
+
+  const handleRevertLayoutPolish = async () => {
+    if (!job || layoutPolishing) {
+      return;
+    }
+    setLayoutPolishing(true);
+    try {
+      const resp = await revertJobLayoutPolish(job.id);
+      setJob((prev) =>
+        prev
+          ? {
+              ...prev,
+              markdown: resp.markdown,
+              preflight: resp.preflight,
+              layout_polished: resp.layout_polished,
+              layout_polish_applied_ops: resp.layout_polish_applied_ops,
+              layout_polish_summary: resp.layout_polish_summary,
+            }
+          : prev,
+      );
+      showToast('已撤销 AI 排版优化，恢复至规则规整后的版本', 'success');
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : '撤销 AI 排版失败', 'error');
+    } finally {
+      setLayoutPolishing(false);
     }
   };
 
@@ -473,6 +540,15 @@ export const WorkbenchPage: React.FC<WorkbenchPageProps> = ({ routePrefix }) => 
           markdown={job.markdown}
           assetUrlMap={assetUrlMap}
           keptOriginalCount={job.preflight.image_stats.kept_original ?? 0}
+          formatStats={job.format_stats}
+          vlmConfigured={Boolean(health?.vlm_configured)}
+          jobRunning={job.status === 'running'}
+          layoutPolished={Boolean(job.layout_polished)}
+          layoutPolishAppliedOps={job.layout_polish_applied_ops ?? 0}
+          layoutPolishSummary={job.layout_polish_summary}
+          layoutPolishing={layoutPolishing}
+          onPolishLayout={() => void handleLayoutPolish()}
+          onRevertLayoutPolish={() => void handleRevertLayoutPolish()}
         />
       )}
     </div>

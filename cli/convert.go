@@ -29,6 +29,7 @@ func RunConvert(args []string) int {
 	stripTOC := fs.Bool("strip-toc", true, "剔除 Word 自动目录")
 	stripCover := fs.Bool("strip-cover", false, "剔除首个标题前的封面内容")
 	stripRev := fs.Bool("strip-revision-table", true, "剔除文首修订记录表")
+	aiLayout := fs.Bool("ai-layout", false, "可选调用 LLM 对文档块进行结构化排版优化（仅调标题/列表/引用/断行，不改写正文）")
 
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -57,6 +58,17 @@ func RunConvert(args []string) int {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "解析 .docx 失败: %v\n", err)
 		return 1
+	}
+	if fmtStats := mdpolish.FormatDocument(doc); fmtStats.Total() > 0 {
+		fmt.Fprintf(
+			os.Stderr,
+			"  - 规则排版规整：标题 +%d · 列表 +%d · 提示框 +%d · 行内 +%d · 表格 +%d\n",
+			fmtStats.PromotedHeadings,
+			fmtStats.NormalizedLists,
+			fmtStats.ConvertedAlerts,
+			fmtStats.CleanedInline,
+			fmtStats.TrimmedTables,
+		)
 	}
 
 	fmt.Fprintf(os.Stderr, "[2/4] 预处理 %d 张内嵌图片...\n", len(doc.Images))
@@ -121,11 +133,15 @@ func RunConvert(args []string) int {
 	}
 
 	var codeTasks []mdpolish.CodePolishTask
+	var layoutChunks []vlm.LayoutPolishInput
 	if !*noVLM && cfg.VLM.IsConfigured() {
 		codeTasks = mdpolish.ExtractCodePolishTasks(doc, *glossary, 12)
+		if *aiLayout {
+			layoutChunks = mdpolish.ExtractLayoutPolishChunks(doc, *glossary, 8)
+		}
 	}
 
-	if len(vlmInputs) > 0 || len(codeTasks) > 0 {
+	if len(vlmInputs) > 0 || len(codeTasks) > 0 || len(layoutChunks) > 0 {
 		client := vlm.NewClient(vlm.ClientConfig{
 			BaseURL:           cfg.VLM.BaseURL,
 			APIKey:            cfg.VLM.APIKey,
@@ -174,6 +190,22 @@ func RunConvert(args []string) int {
 			codeResults := vlm.ProcessCodePolishBatch(context.Background(), client, codeInputs, cfg.VLM.MaxConcurrency, nil)
 			applied := mdpolish.ApplyCodePolishResults(doc, codeTasks, codeResults)
 			fmt.Fprintf(os.Stderr, "  - 已应用 %d 处代码块精修\n", applied)
+		}
+		if len(layoutChunks) > 0 {
+			fmt.Fprintf(os.Stderr, "[3/4] 调用 LLM (%s) 结构化排版优化 (%d 个片段)...\n", cfg.VLM.Model, len(layoutChunks))
+			layoutResults, layoutErr := vlm.ProcessLayoutPolishBatch(context.Background(), client, layoutChunks, cfg.VLM.MaxConcurrency, nil)
+			if layoutErr != nil {
+				fmt.Fprintf(os.Stderr, "  - AI 排版优化跳过（调用失败: %v）\n", layoutErr)
+			} else {
+				var allOps []vlm.LayoutPolishOp
+				for _, ch := range layoutChunks {
+					if res := layoutResults[ch.ChunkID]; res != nil && len(res.Ops) > 0 {
+						allOps = append(allOps, res.Ops...)
+					}
+				}
+				applied := mdpolish.ApplyLayoutPolishOps(doc, allOps)
+				fmt.Fprintf(os.Stderr, "  - 已应用 %d 处结构化排版优化\n", applied)
+			}
 		}
 	} else {
 		fmt.Fprintln(os.Stderr, "[3/4] 跳过 VLM 识图阶段（--no-vlm 或未配置 VLM）")

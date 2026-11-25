@@ -105,6 +105,13 @@ func Assemble(doc *docxparser.DocumentIR, states map[string]*ImageState) string 
 				lastRenderedCaption = ""
 			}
 
+		case docxparser.BlockQuote:
+			if q := renderBlockQuote(blk.AlertType, blk.Text); q != "" {
+				out = append(out, q)
+				prevKind = blk.Kind
+				lastRenderedCaption = ""
+			}
+
 		case docxparser.BlockCode:
 			if fenced := renderFencedCode(blk.Language, blk.Text); fenced != "" {
 				out = append(out, fenced)
@@ -295,4 +302,73 @@ func renderFencedCode(lang, code string) string {
 	}
 	fence := strings.Repeat("`", fenceLen)
 	return fence + strings.TrimSpace(lang) + "\n" + normalized + "\n" + fence
+}
+
+func normalizeAlertType(raw string) string {
+	switch strings.ToUpper(strings.TrimSpace(raw)) {
+	case "NOTE", "TIP", "IMPORTANT", "WARNING", "CAUTION":
+		return strings.ToUpper(strings.TrimSpace(raw))
+	default:
+		return ""
+	}
+}
+
+func renderBlockQuote(alertType, text string) string {
+	normalized := strings.ReplaceAll(text, "\r\n", "\n")
+	normalized = strings.ReplaceAll(normalized, "\r", "\n")
+	trimmed := strings.TrimSpace(normalized)
+	if trimmed == "" {
+		return ""
+	}
+	lines := strings.Split(trimmed, "\n")
+	var b strings.Builder
+	if alert := normalizeAlertType(alertType); alert != "" {
+		b.WriteString("> [!")
+		b.WriteString(alert)
+		b.WriteString("]\n")
+	}
+	for i, line := range lines {
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		clean := strings.TrimRight(line, " \t")
+		if clean == "" {
+			b.WriteByte('>')
+		} else {
+			b.WriteString("> ")
+			b.WriteString(clean)
+		}
+	}
+	return b.String()
+}
+
+// CloneDocumentIR creates a deep copy of DocumentIR blocks (including TableRows)
+// so structural polish operations and revert snapshots remain isolated.
+func CloneDocumentIR(doc *docxparser.DocumentIR) *docxparser.DocumentIR {
+	if doc == nil {
+		return nil
+	}
+	cp := *doc
+	if doc.Blocks != nil {
+		cp.Blocks = make([]docxparser.Block, len(doc.Blocks))
+		for i, blk := range doc.Blocks {
+			if blk.TableRows != nil {
+				rows := make([][]string, len(blk.TableRows))
+				for rIdx, row := range blk.TableRows {
+					if row != nil {
+						rowCp := make([]string, len(row))
+						copy(rowCp, row)
+						rows[rIdx] = rowCp
+					}
+				}
+				blk.TableRows = rows
+			}
+			cp.Blocks[i] = blk
+		}
+	}
+	if doc.Images != nil {
+		cp.Images = make([]*docxparser.ImageAsset, len(doc.Images))
+		copy(cp.Images, doc.Images)
+	}
+	return &cp
 }

@@ -7,6 +7,7 @@ import type {
   ImageMutationResponse,
   JobDetail,
   JobSummary,
+  LayoutPolishResponse,
 } from '../types/api';
 
 export function getApiBaseUrl(): string {
@@ -85,6 +86,7 @@ export interface CreateJobParams {
   strip_revision_table: boolean;
   skip_vlm: boolean;
   keep_unconverted_originals: boolean;
+  ai_layout_polish?: boolean;
 }
 
 export function createJob(params: CreateJobParams): Promise<JobDetail> {
@@ -96,6 +98,7 @@ export function createJob(params: CreateJobParams): Promise<JobDetail> {
   form.append('strip_revision_table', String(params.strip_revision_table));
   form.append('skip_vlm', String(params.skip_vlm));
   form.append('keep_unconverted_originals', String(params.keep_unconverted_originals));
+  form.append('ai_layout_polish', String(Boolean(params.ai_layout_polish)));
   return requestJson<JobDetail>('/jobs', {
     method: 'POST',
     body: form,
@@ -164,6 +167,24 @@ export function retryImage(
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+    },
+  );
+}
+
+export function polishJobLayout(jobId: string): Promise<LayoutPolishResponse> {
+  return requestJson<LayoutPolishResponse>(
+    `/jobs/${encodeURIComponent(jobId)}/layout-polish`,
+    {
+      method: 'POST',
+    },
+  );
+}
+
+export function revertJobLayoutPolish(jobId: string): Promise<LayoutPolishResponse> {
+  return requestJson<LayoutPolishResponse>(
+    `/jobs/${encodeURIComponent(jobId)}/layout-polish/revert`,
+    {
+      method: 'POST',
     },
   );
 }

@@ -41,12 +41,21 @@ export interface NoiseStats {
   stripped_revision_tables: number;
 }
 
+export interface FormatStats {
+  promoted_headings: number;
+  normalized_lists: number;
+  converted_alerts: number;
+  cleaned_inline: number;
+  trimmed_tables: number;
+}
+
 export interface JobOptions {
   strip_toc: boolean;
   strip_cover: boolean;
   strip_revision_table: boolean;
   skip_vlm: boolean;
   keep_unconverted_originals?: boolean;
+  ai_layout_polish?: boolean;
 }
 
 export interface ImageState {
@@ -143,9 +152,22 @@ export interface JobDetail {
   progress_done: number;
   progress_total: number;
   noise_stats: NoiseStats;
+  format_stats?: FormatStats;
+  layout_polished?: boolean;
+  layout_polish_applied_ops?: number;
+  layout_polish_summary?: string;
   images: ImageState[];
   markdown: string;
   preflight: PreflightReport;
+}
+
+export interface LayoutPolishResponse {
+  markdown: string;
+  preflight: PreflightReport;
+  applied_ops: number;
+  layout_polished: boolean;
+  layout_polish_applied_ops: number;
+  layout_polish_summary?: string;
 }
 
 export interface ImageMutationResponse {

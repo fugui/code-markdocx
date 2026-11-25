@@ -229,6 +229,17 @@
   cursor: pointer;
 }
 
+.code-markdocx-check.is-disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.code-markdocx-format-summary {
+  margin: 0.25rem 0 0;
+  font-size: 0.78rem;
+  color: var(--color-primary);
+}
+
 .code-markdocx-glossary {
   display: flex;
   flex-direction: column;

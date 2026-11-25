@@ -1,6 +1,32 @@
-import type { ImageState, PreflightReport } from '../types/api';
+import type { FormatStats, ImageState, PreflightReport } from '../types/api';
 
 export type ReviewFilter = 'all' | 'attention' | 'mermaid' | 'original' | 'skipped';
+
+export function formatAutoPolishSummary(stats?: FormatStats): string {
+  if (!stats) {
+    return '';
+  }
+  const parts: string[] = [];
+  if (stats.promoted_headings > 0) {
+    parts.push(`标题 +${stats.promoted_headings}`);
+  }
+  if (stats.normalized_lists > 0) {
+    parts.push(`列表 +${stats.normalized_lists}`);
+  }
+  if (stats.converted_alerts > 0) {
+    parts.push(`提示框 +${stats.converted_alerts}`);
+  }
+  if (stats.cleaned_inline > 0) {
+    parts.push(`行内格式 +${stats.cleaned_inline}`);
+  }
+  if (stats.trimmed_tables > 0) {
+    parts.push(`表格规整 +${stats.trimmed_tables}`);
+  }
+  if (parts.length === 0) {
+    return '';
+  }
+  return `规则自动规整：${parts.join(' · ')}`;
+}
 
 export interface PreflightIssue {
   id: string;

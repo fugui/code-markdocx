@@ -22,6 +22,7 @@ export const UploadDropzone: React.FC<UploadDropzoneProps> = ({
   const [stripCover, setStripCover] = useState(false);
   const [skipVLM, setSkipVLM] = useState(false);
   const [keepUnconvertedOriginals, setKeepUnconvertedOriginals] = useState(false);
+  const [aiLayoutPolish, setAiLayoutPolish] = useState(false);
   const [glossary, setGlossary] = useState('');
   const [fileError, setFileError] = useState('');
 
@@ -58,6 +59,7 @@ export const UploadDropzone: React.FC<UploadDropzoneProps> = ({
       strip_revision_table: stripRevisionTable,
       skip_vlm: skipVLM,
       keep_unconverted_originals: keepUnconvertedOriginals,
+      ai_layout_polish: aiLayoutPolish && !skipVLM && Boolean(health?.vlm_configured),
     });
   };
 
@@ -165,7 +167,13 @@ export const UploadDropzone: React.FC<UploadDropzoneProps> = ({
             <input
               type="checkbox"
               checked={skipVLM}
-              onChange={(e) => setSkipVLM(e.target.checked)}
+              onChange={(e) => {
+                const next = e.target.checked;
+                setSkipVLM(next);
+                if (next) {
+                  setAiLayoutPolish(false);
+                }
+              }}
             />
             <span>仅提取正文结构（跳过 VLM 识图）</span>
           </label>
@@ -176,6 +184,26 @@ export const UploadDropzone: React.FC<UploadDropzoneProps> = ({
               onChange={(e) => setKeepUnconvertedOriginals(e.target.checked)}
             />
             <span>未转 Mermaid 的图片自动引用原图（支持 ZIP 打包下载）</span>
+          </label>
+          <label
+            className={`code-markdocx-check ${
+              skipVLM || !health?.vlm_configured ? 'is-disabled' : ''
+            }`}
+            title={
+              !health?.vlm_configured
+                ? '需在服务端配置有效 VLM 后使用'
+                : skipVLM
+                  ? '已选择跳过 VLM，无法自动执行 AI 排版'
+                  : '仅调整标题、列表、引用与错误断行结构，绝不改写正文文字'
+            }
+          >
+            <input
+              type="checkbox"
+              disabled={skipVLM || !health?.vlm_configured}
+              checked={aiLayoutPolish && !skipVLM && Boolean(health?.vlm_configured)}
+              onChange={(e) => setAiLayoutPolish(e.target.checked)}
+            />
+            <span>转换完成后自动执行 AI 排版优化（仅调结构，不改正文）</span>
           </label>
         </div>
 

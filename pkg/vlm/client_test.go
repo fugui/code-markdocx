@@ -161,3 +161,44 @@ func TestParseCodeScreenshotAndPolishCodeWithPreservationGuard(t *testing.T) {
 		t.Fatalf("unexpected polished result: %+v", polished)
 	}
 }
+
+func TestParseLayoutPolishJSONAndClient(t *testing.T) {
+	raw := "```json\n{\"ops\":[{\"op\":\"set_heading\",\"block\":1,\"level\":2},{\"op\":\"set_alert\",\"block\":3,\"alert_type\":\"warning\"},{\"op\":\"unknown_op\",\"block\":4},{\"op\":\"set_alert\",\"block\":5,\"alert_type\":\"INVALID\"}],\"summary\":\"提升 1 处标题并标注警告提示\"}\n```"
+	parsed, err := ParseLayoutPolishJSON(raw)
+	if err != nil {
+		t.Fatalf("ParseLayoutPolishJSON failed: %v", err)
+	}
+	if len(parsed.Ops) != 2 {
+		t.Fatalf("expected 2 valid ops after filtering, got %+v", parsed.Ops)
+	}
+	if parsed.Ops[1].AlertType != "WARNING" {
+		t.Fatalf("expected normalized uppercase WARNING, got %q", parsed.Ops[1].AlertType)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{"message": map[string]string{
+					"content": `{"ops":[{"op":"set_heading","block":1,"level":2}],"summary":"已识别小节标题"}`,
+				}},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	client := NewClient(ClientConfig{BaseURL: srv.URL, Model: "gpt-4o"})
+	res, err := client.PolishLayout(context.Background(), LayoutPolishInput{
+		ChunkID:  "layout-01",
+		DocTitle: "测试文档",
+		Blocks: []LayoutBlockSummary{
+			{Index: 0, Kind: "heading", Level: 1, TextPreview: "总览", CharCount: 2},
+			{Index: 1, Kind: "paragraph", TextPreview: "架构边界", CharCount: 4},
+		},
+	})
+	if err != nil {
+		t.Fatalf("PolishLayout failed: %v", err)
+	}
+	if len(res.Ops) != 1 || res.Ops[0].Op != LayoutOpSetHeading || res.Ops[0].Block != 1 {
+		t.Fatalf("unexpected PolishLayout result: %+v", res)
+	}
+}

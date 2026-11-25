@@ -147,3 +147,76 @@ func BuildCodePolishUserPrompt(in CodePolishInput) string {
 	}
 	return b.String()
 }
+
+func BuildLayoutPolishSystemPrompt(extraPrompt string) string {
+	base := `你是一位资深技术文档排版架构师，负责审阅从 Word (.docx) 提取的文档块结构清单，并输出**结构化排版修正指令**（不重写、不修改任何正文文字）。
+
+请严格遵守以下输出格式，**只输出一个合法的 JSON 对象**（不要输出 JSON 之外的任何解释或 Markdown 围栏）：
+{
+  "ops": [
+    {"op": "set_heading", "block": 3, "level": 2},
+    {"op": "set_list_item", "block": 7, "ordered": false, "indent": 0},
+    {"op": "set_alert", "block": 9, "alert_type": "NOTE"},
+    {"op": "set_quote", "block": 12},
+    {"op": "set_paragraph", "block": 15},
+    {"op": "merge_paragraphs", "start_block": 18, "end_block": 19}
+  ],
+  "summary": "1 句简明中文总结本次结构调整（若无需调整则填“结构已清晰，无需调整”）"
+}
+
+可用操作与严格约束：
+1. set_heading：将 block 对应的普通段落/列表项提升或调整为标题（level 取 1~6）。仅适用于明确的小节标题、短小加粗标题或层次有误的标题；严禁把长句子、带句号的完整段落或“图1/表1”图注转为标题。
+2. set_paragraph：将误识别为标题/列表的普通正文还原为 paragraph。
+3. set_list_item：将明显属于分点枚举的普通段落转为 list_item（ordered 为 true/false，indent 取 0~3）。
+4. set_quote：将独立摘录、引言或注释段转为普通引用块。
+5. set_alert：将注意事项、风险提示、重要提醒等转为 GitHub Alert（alert_type 仅限 NOTE / TIP / IMPORTANT / WARNING / CAUTION）。
+6. merge_paragraphs：将因 PDF 转 Word 或硬回车造成的同一自然段错误拆行（start_block 到 end_block，连续 paragraph，最多 6 块）合并为一段。仅当确认属于同一句话被硬换行截断时才合并，不要把独立的分点或不同语义段落合并。
+
+铁律（必须遵守）：
+- 带有 [IMMUTABLE] 标记的块（图片、代码块、表格）绝对禁止出现在任何操作的目标索引中。
+- 每个操作必须引用输入中真实存在的全局 block 索引，且多个操作之间不要对同一个 block 产生冲突或重叠。
+- 宁缺毋滥：如果当前文档结构已经清晰合理，请直接返回 {"ops": [], "summary": "结构已清晰，无需调整"}。`
+
+	if extra := strings.TrimSpace(extraPrompt); extra != "" {
+		return base + "\n\n补充排版规范：\n" + extra
+	}
+	return base
+}
+
+func BuildLayoutPolishUserPrompt(in LayoutPolishInput) string {
+	var b strings.Builder
+	b.WriteString("请审阅以下文档块结构清单，并按系统要求输出结构化排版 JSON 指令。\n")
+	if strings.TrimSpace(in.DocTitle) != "" {
+		b.WriteString(fmt.Sprintf("- 文档标题：%s\n", strings.TrimSpace(in.DocTitle)))
+	}
+	if strings.TrimSpace(in.ChunkID) != "" {
+		b.WriteString(fmt.Sprintf("- 片段编号：%s\n", strings.TrimSpace(in.ChunkID)))
+	}
+	if hints := strings.TrimSpace(in.GlossaryHints); hints != "" {
+		b.WriteString(fmt.Sprintf("- 项目术语参考：%s\n", hints))
+	}
+	b.WriteString(fmt.Sprintf("- 文档块列表（共 %d 块，索引为全局索引）：\n", len(in.Blocks)))
+	for _, blk := range in.Blocks {
+		tag := blk.Kind
+		switch blk.Kind {
+		case "heading":
+			tag = fmt.Sprintf("heading:h%d", blk.Level)
+		case "list_item":
+			if blk.Ordered {
+				tag = "list_item:ordered"
+			} else {
+				tag = "list_item:bullet"
+			}
+		case "quote":
+			if blk.AlertType != "" {
+				tag = "quote:" + blk.AlertType
+			}
+		}
+		if blk.Immutable {
+			b.WriteString(fmt.Sprintf("[%d] (%s, IMMUTABLE) %s\n", blk.Index, tag, blk.TextPreview))
+			continue
+		}
+		b.WriteString(fmt.Sprintf("[%d] (%s, %d字) %s\n", blk.Index, tag, blk.CharCount, blk.TextPreview))
+	}
+	return b.String()
+}

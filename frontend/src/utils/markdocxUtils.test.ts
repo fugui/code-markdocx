@@ -8,6 +8,7 @@ import {
   extractHeadings,
   filterImages,
   findActiveHeadingId,
+  formatAutoPolishSummary,
   formatBytes,
   getPreflightStatusLevel,
   isUnconvertedWithImage,
@@ -328,4 +329,28 @@ test('computeScrollTargetTop computes non-negative scroll offset within containe
   assert.equal(computeScrollTargetTop(120, 480, 100, 16), 484);
   assert.equal(computeScrollTargetTop(10, 110, 100, 16), 4);
   assert.equal(computeScrollTargetTop(0, 105, 100, 16), 0);
+});
+
+test('formatAutoPolishSummary formats non-zero rule formatting stats cleanly', () => {
+  assert.equal(formatAutoPolishSummary(undefined), '');
+  assert.equal(
+    formatAutoPolishSummary({
+      promoted_headings: 0,
+      normalized_lists: 0,
+      converted_alerts: 0,
+      cleaned_inline: 0,
+      trimmed_tables: 0,
+    }),
+    '',
+  );
+  assert.equal(
+    formatAutoPolishSummary({
+      promoted_headings: 3,
+      normalized_lists: 2,
+      converted_alerts: 1,
+      cleaned_inline: 4,
+      trimmed_tables: 0,
+    }),
+    '规则自动规整：标题 +3 · 列表 +2 · 提示框 +1 · 行内格式 +4',
+  );
 });
