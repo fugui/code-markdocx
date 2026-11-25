@@ -17,6 +17,36 @@ export interface TocHeading {
   level: number;
 }
 
+export interface HeadingOffset {
+  id: string;
+  top: number;
+}
+
+export function findActiveHeadingId(
+  offsets: readonly HeadingOffset[],
+  threshold = 36,
+): string | null {
+  if (offsets.length === 0) {
+    return null;
+  }
+  let activeId = offsets[0].id;
+  for (const offset of offsets) {
+    if (offset.top <= threshold) {
+      activeId = offset.id;
+    }
+  }
+  return activeId;
+}
+
+export function computeScrollTargetTop(
+  currentScrollTop: number,
+  elementTop: number,
+  containerTop: number,
+  topPadding = 16,
+): number {
+  return Math.max(0, Math.round(currentScrollTop + (elementTop - containerTop) - topPadding));
+}
+
 export function formatBytes(bytes: number): string {
   if (bytes < 1024) {
     return `${bytes} B`;

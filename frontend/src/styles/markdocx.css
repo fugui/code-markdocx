@@ -682,7 +682,7 @@
   background: var(--color-bg-app);
   border: 1px solid var(--color-border-primary);
   overflow: auto;
-  max-height: 68vh;
+  max-height: max(360px, calc(100vh - 10.5rem));
   font-family: var(--font-family-mono);
   font-size: 0.82rem;
   line-height: 1.55;
@@ -939,6 +939,16 @@
   .code-markdocx-preview-layout.has-toc {
     grid-template-columns: minmax(0, 1fr);
   }
+
+  .code-markdocx-toc {
+    order: -1;
+    position: static;
+    max-height: 220px;
+  }
+
+  .code-markdocx-preview-body {
+    max-height: 68vh;
+  }
 }
 
 .code-markdocx-preview-body {
@@ -947,17 +957,30 @@
   border-radius: var(--radius-md);
   padding: 1.5rem 1.75rem;
   min-width: 0;
+  max-height: max(360px, calc(100vh - 10.5rem));
+  overflow-y: auto;
 }
 
 .code-markdocx-toc {
   position: sticky;
   top: 1rem;
+  display: flex;
+  flex-direction: column;
   background: var(--color-bg-muted);
   border: 1px solid var(--color-border-primary);
   border-radius: var(--radius-md);
   padding: 0.85rem;
-  max-height: 75vh;
-  overflow-y: auto;
+  max-height: max(360px, calc(100vh - 10.5rem));
+  overflow: hidden;
+}
+
+.code-markdocx-toc-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+  flex-shrink: 0;
 }
 
 .code-markdocx-toc-title {
@@ -966,19 +989,44 @@
   color: var(--color-text-secondary);
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  margin-bottom: 0.5rem;
+}
+
+.code-markdocx-toc-top-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 0.15rem 0.45rem;
+  border: 1px solid var(--color-border-primary);
+  border-radius: var(--radius-xs);
+  background: var(--color-bg-surface);
+  color: var(--color-text-secondary);
+  font-size: 0.72rem;
+  cursor: pointer;
+  transition: var(--transition-fast);
+}
+
+.code-markdocx-toc-top-btn:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-primary);
+  border-color: var(--color-primary-border);
 }
 
 .code-markdocx-toc-list {
   display: flex;
   flex-direction: column;
   gap: 0.2rem;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 0.15rem;
 }
 
 .code-markdocx-toc-item {
   text-align: left;
   background: transparent;
   border: none;
+  border-left: 2px solid transparent;
   padding: 0.28rem 0.45rem;
   border-radius: var(--radius-xs);
   color: var(--color-text-secondary);
@@ -987,6 +1035,8 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  flex-shrink: 0;
+  transition: var(--transition-fast);
 }
 
 .code-markdocx-toc-item:hover {
@@ -994,9 +1044,20 @@
   color: var(--color-primary);
 }
 
+.code-markdocx-toc-item.is-active {
+  background: var(--color-primary-subtle);
+  color: var(--color-primary);
+  border-left-color: var(--color-primary);
+  font-weight: 600;
+}
+
 .code-markdocx-toc-item.is-lvl-1 {
   font-weight: 600;
   color: var(--color-text-primary);
+}
+
+.code-markdocx-toc-item.is-lvl-1.is-active {
+  color: var(--color-primary);
 }
 
 .code-markdocx-toc-item.is-lvl-2 {
@@ -1023,7 +1084,7 @@
 
 .code-markdocx-prose-h {
   color: var(--color-text-primary);
-  scroll-margin-top: 80px;
+  scroll-margin-top: 1rem;
   line-height: 1.35;
 }
 

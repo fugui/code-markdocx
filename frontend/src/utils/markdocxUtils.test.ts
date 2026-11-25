@@ -3,9 +3,11 @@ import test from 'node:test';
 import type { ImageState, PreflightReport } from '../types/api.ts';
 import {
   collectPreflightIssues,
+  computeScrollTargetTop,
   countSyntaxErrors,
   extractHeadings,
   filterImages,
+  findActiveHeadingId,
   formatBytes,
   getPreflightStatusLevel,
   isUnconvertedWithImage,
@@ -276,4 +278,54 @@ test('tokenizeInlineMarkdown handles bold, nested formatting, and terminates saf
   const pathological = `${'**'.repeat(20)}text${'**'.repeat(20)}`;
   const tokens = tokenizeInlineMarkdown(pathological);
   assert.ok(tokens.length > 0);
+});
+
+test('findActiveHeadingId tracks active heading across scroll positions', () => {
+  assert.equal(findActiveHeadingId([]), null);
+
+  const offsets = [
+    { id: 'overview', top: 20 },
+    { id: 'architecture', top: 180 },
+    { id: 'api', top: 420 },
+  ];
+  // Near top: all headings below threshold -> default to first
+  assert.equal(
+    findActiveHeadingId(
+      offsets.map((o) => ({ ...o, top: o.top + 30 })),
+      36,
+    ),
+    'overview',
+  );
+
+  // Middle scroll: exact threshold boundary matches
+  assert.equal(
+    findActiveHeadingId(
+      [
+        { id: 'overview', top: -140 },
+        { id: 'architecture', top: 36 },
+        { id: 'api', top: 260 },
+      ],
+      36,
+    ),
+    'architecture',
+  );
+
+  // Scrolled past all headings -> last heading remains active
+  assert.equal(
+    findActiveHeadingId(
+      [
+        { id: 'overview', top: -400 },
+        { id: 'architecture', top: -220 },
+        { id: 'api', top: -10 },
+      ],
+      36,
+    ),
+    'api',
+  );
+});
+
+test('computeScrollTargetTop computes non-negative scroll offset within container', () => {
+  assert.equal(computeScrollTargetTop(120, 480, 100, 16), 484);
+  assert.equal(computeScrollTargetTop(10, 110, 100, 16), 4);
+  assert.equal(computeScrollTargetTop(0, 105, 100, 16), 0);
 });

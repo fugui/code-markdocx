@@ -1,6 +1,11 @@
-import React, { useMemo, useState } from 'react';
-import { Check, Code2, Copy, Eye, ListTree } from 'lucide-react';
-import { extractHeadings } from '../utils/markdocxUtils';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { ArrowUp, Check, Code2, Copy, Eye, ListTree } from 'lucide-react';
+import {
+  computeScrollTargetTop,
+  extractHeadings,
+  findActiveHeadingId,
+  type HeadingOffset,
+} from '../utils/markdocxUtils';
 import { MarkdownRenderer } from './MarkdownRenderer';
 
 export interface MarkdownPreviewProps {
@@ -17,6 +22,11 @@ export const MarkdownPreview: React.FC<MarkdownPreviewProps> = ({
   const [copied, setCopied] = useState(false);
   const [viewMode, setViewMode] = useState<'rendered' | 'source'>('rendered');
   const [showToc, setShowToc] = useState(true);
+  const [activeHeadingId, setActiveHeadingId] = useState<string | null>(null);
+  const [showBackToTop, setShowBackToTop] = useState(false);
+
+  const previewBodyRef = useRef<HTMLDivElement | null>(null);
+  const tocListRef = useRef<HTMLElement | null>(null);
 
   const headings = useMemo(() => extractHeadings(markdown), [markdown]);
 
@@ -31,11 +41,123 @@ export const MarkdownPreview: React.FC<MarkdownPreviewProps> = ({
   };
 
   const handleJumpHeading = (id: string) => {
+    setActiveHeadingId(id);
     const el = document.getElementById(id);
-    if (el) {
-      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    if (!el) {
+      return;
     }
+    const container = previewBodyRef.current;
+    if (
+      container &&
+      container.contains(el) &&
+      container.scrollHeight > container.clientHeight + 2
+    ) {
+      const targetTop = computeScrollTargetTop(
+        container.scrollTop,
+        el.getBoundingClientRect().top,
+        container.getBoundingClientRect().top,
+        16,
+      );
+      container.scrollTo({ top: targetTop, behavior: 'smooth' });
+      return;
+    }
+    el.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
+
+  const handleScrollTop = () => {
+    previewBodyRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  useEffect(() => {
+    if (viewMode !== 'rendered' || headings.length === 0) {
+      setShowBackToTop(false);
+      if (headings.length === 0) {
+        setActiveHeadingId(null);
+      }
+      return;
+    }
+
+    const container = previewBodyRef.current;
+    if (!container) {
+      setActiveHeadingId(headings[0].id);
+      return;
+    }
+
+    let rafId = 0;
+
+    const syncScrollState = () => {
+      rafId = 0;
+      setShowBackToTop(container.scrollTop > 160);
+
+      const hasScroll = container.scrollHeight > container.clientHeight + 2;
+      if (
+        hasScroll &&
+        container.scrollTop + container.clientHeight >= container.scrollHeight - 4
+      ) {
+        setActiveHeadingId(headings[headings.length - 1].id);
+        return;
+      }
+
+      const containerTop = container.getBoundingClientRect().top;
+      const offsets: HeadingOffset[] = [];
+      for (const h of headings) {
+        const el = document.getElementById(h.id);
+        if (el && container.contains(el)) {
+          offsets.push({
+            id: h.id,
+            top: el.getBoundingClientRect().top - containerTop,
+          });
+        }
+      }
+      setActiveHeadingId(findActiveHeadingId(offsets, 36) ?? headings[0].id);
+    };
+
+    const handleScroll = () => {
+      if (rafId !== 0) {
+        return;
+      }
+      rafId = window.requestAnimationFrame(syncScrollState);
+    };
+
+    syncScrollState();
+    container.addEventListener('scroll', handleScroll, { passive: true });
+    window.addEventListener('resize', handleScroll);
+
+    return () => {
+      if (rafId !== 0) {
+        window.cancelAnimationFrame(rafId);
+      }
+      container.removeEventListener('scroll', handleScroll);
+      window.removeEventListener('resize', handleScroll);
+    };
+  }, [viewMode, headings]);
+
+  useEffect(() => {
+    if (viewMode !== 'rendered' || !showToc || !activeHeadingId) {
+      return;
+    }
+    const tocList = tocListRef.current;
+    if (!tocList) {
+      return;
+    }
+    const activeBtn = tocList.querySelector<HTMLElement>('[data-toc-active="true"]');
+    if (!activeBtn) {
+      return;
+    }
+    const listRect = tocList.getBoundingClientRect();
+    const btnRect = activeBtn.getBoundingClientRect();
+    if (btnRect.top < listRect.top) {
+      tocList.scrollTo({
+        top: Math.max(0, tocList.scrollTop + (btnRect.top - listRect.top) - 8),
+        behavior: 'smooth',
+      });
+    } else if (btnRect.bottom > listRect.bottom) {
+      tocList.scrollTo({
+        top: tocList.scrollTop + (btnRect.bottom - listRect.bottom) + 8,
+        behavior: 'smooth',
+      });
+    }
+  }, [activeHeadingId, showToc, viewMode]);
 
   return (
     <div className="code-markdocx-card">
@@ -105,25 +227,45 @@ export const MarkdownPreview: React.FC<MarkdownPreviewProps> = ({
             showToc && headings.length > 0 ? 'has-toc' : ''
           }`}
         >
-          <div className="code-markdocx-preview-body">
+          <div className="code-markdocx-preview-body" ref={previewBodyRef}>
             <MarkdownRenderer markdown={markdown} assetUrlMap={assetUrlMap} />
           </div>
 
           {showToc && headings.length > 0 && (
             <aside className="code-markdocx-toc" aria-label="文档目录大纲">
-              <div className="code-markdocx-toc-title">文档目录</div>
-              <nav className="code-markdocx-toc-list">
-                {headings.map((h) => (
+              <div className="code-markdocx-toc-header">
+                <div className="code-markdocx-toc-title">文档目录</div>
+                {showBackToTop && (
                   <button
-                    key={h.id}
                     type="button"
-                    className={`code-markdocx-toc-item is-lvl-${Math.min(4, h.level)}`}
-                    onClick={() => handleJumpHeading(h.id)}
-                    title={h.text}
+                    className="code-markdocx-toc-top-btn"
+                    onClick={handleScrollTop}
+                    title="回到文档顶部"
                   >
-                    {h.text}
+                    <ArrowUp size={12} />
+                    <span>顶部</span>
                   </button>
-                ))}
+                )}
+              </div>
+              <nav className="code-markdocx-toc-list" ref={tocListRef}>
+                {headings.map((h) => {
+                  const isActive = activeHeadingId === h.id;
+                  return (
+                    <button
+                      key={h.id}
+                      type="button"
+                      className={`code-markdocx-toc-item is-lvl-${Math.min(4, h.level)} ${
+                        isActive ? 'is-active' : ''
+                      }`}
+                      aria-current={isActive ? 'location' : undefined}
+                      data-toc-active={isActive ? 'true' : undefined}
+                      onClick={() => handleJumpHeading(h.id)}
+                      title={h.text}
+                    >
+                      {h.text}
+                    </button>
+                  );
+                })}
               </nav>
             </aside>
           )}
